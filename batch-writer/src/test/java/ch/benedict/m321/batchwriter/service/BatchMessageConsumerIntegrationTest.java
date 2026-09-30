@@ -52,6 +52,9 @@ class BatchMessageConsumerIntegrationTest {
 
     private static final UUID TEST_ROOM_ID = UUID.fromString("3f2b1c4e-0000-0000-0000-000000000001");
 
+    /**
+     * Initialisiert vor jedem Test die Datenbanktabellen und leert die RabbitMQ-Queue.
+     */
     @BeforeEach
     void setUp() {
         // Tabellen fuer den Test anlegen
@@ -82,6 +85,9 @@ class BatchMessageConsumerIntegrationTest {
         rabbitAdmin.purgeQueue(QueueNames.PERSIST_QUEUE);
     }
 
+    /**
+     * Prueft den Regelfall: Eine Nachricht wird aus der Queue konsumiert und in die DB geschrieben.
+     */
     @Test
     void consumesMessageFromQueueAndWritesToDatabase() {
         UUID messageId = UUID.randomUUID();

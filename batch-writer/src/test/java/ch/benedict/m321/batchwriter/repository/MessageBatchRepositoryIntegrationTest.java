@@ -47,6 +47,9 @@ class MessageBatchRepositoryIntegrationTest {
 
     private static final UUID TEST_ROOM_ID = UUID.fromString("3f2b1c4e-0000-0000-0000-000000000001");
 
+    /**
+     * Erstellt vor jedem Test das noetige Datenbankschema und bereitet einen Testraum vor.
+     */
     @BeforeEach
     void setUpDatabaseSchema() {
         // Tabellen fuer den Test anlegen
@@ -77,6 +80,9 @@ class MessageBatchRepositoryIntegrationTest {
         jdbcTemplate.update("INSERT INTO room (id, name) VALUES (?, ?)", TEST_ROOM_ID, "General");
     }
 
+    /**
+     * Stellt sicher, dass mehrere Chat-Nachrichten in einem einzigen Aufruf korrekt gespeichert werden.
+     */
     @Test
     void insertsBatchOfMessagesSuccessfully() {
         List<ChatMessage> messages = new ArrayList<>();
@@ -97,6 +103,9 @@ class MessageBatchRepositoryIntegrationTest {
         assertEquals(2, databaseCount);
     }
 
+    /**
+     * Prueft, dass doppelt gesendete Nachrichten mit identischer ID dank ON CONFLICT ignoriert werden.
+     */
     @Test
     void ignoresDuplicateMessagesWithSameId() {
         UUID duplicateId = UUID.randomUUID();

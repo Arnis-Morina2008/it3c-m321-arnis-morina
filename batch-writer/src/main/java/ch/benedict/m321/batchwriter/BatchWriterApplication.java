@@ -18,6 +18,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 public class BatchWriterApplication {
 
+    /**
+     * Startet die Spring Boot Anwendung.
+     *
+     * @param args optionale Kommandozeilenargumente
+     */
     public static void main(String[] args) {
         SpringApplication.run(BatchWriterApplication.class, args);
     }

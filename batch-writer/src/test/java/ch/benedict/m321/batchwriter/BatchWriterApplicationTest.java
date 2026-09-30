@@ -24,6 +24,9 @@ class BatchWriterApplicationTest {
     @ServiceConnection
     static RabbitMQContainer rabbitMq = new RabbitMQContainer("rabbitmq:3.13-management");
 
+    /**
+     * Stellt sicher, dass alle Spring-Beans erfolgreich initialisiert werden koennen.
+     */
     @Test
     void contextLoads() {
         // Faellt der Kontextstart fehl, wirft Spring eine Exception und der Test wird rot.
