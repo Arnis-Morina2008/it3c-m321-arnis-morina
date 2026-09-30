@@ -27,5 +27,6 @@
     <!-- Weitere Dienste kommen hier dazu: batch-writer, web-gateway, load-generator. -->
     <modules>
         <module>chat-service</module>
+        <module>batch-writer</module>
     </modules>
 </project>

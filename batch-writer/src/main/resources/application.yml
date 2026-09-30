@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: batch-writer
+  rabbitmq:
+    # Im Docker-Netzwerk heisst der Host "rabbitmq", lokal "localhost"
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  datasource:
+    # Im Docker-Netzwerk heisst der Host "postgres", lokal "localhost"
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:5432/${POSTGRES_DB:chat}
+    username: ${POSTGRES_USER:chat}
+    password: ${POSTGRES_PASSWORD:guest}
+    driver-class-name: org.postgresql.Driver
+
+logging:
+  level:
+    # Im Unterricht wollen wir die Batch-Inserts und RabbitMQ-Logs genau sehen
+    ch.benedict.m321: DEBUG
