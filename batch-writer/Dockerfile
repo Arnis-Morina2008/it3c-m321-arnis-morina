@@ -6,16 +6,15 @@ WORKDIR /build
 COPY pom.xml .
 COPY chat-service/pom.xml chat-service/pom.xml
 COPY batch-writer/pom.xml batch-writer/pom.xml
-COPY chat-service/src chat-service/src
-# Tests werden hier übersprungen: Testcontainers bräuchte einen Docker-Daemon
+COPY batch-writer/src batch-writer/src
+# Tests werden hier uebersprungen: Testcontainers braeuchte einen Docker-Daemon
 # INNERHALB des Builds. Getestet wird vorher mit "mvn test".
-RUN mvn -q -pl chat-service -am package -DskipTests
+RUN mvn -q -pl batch-writer -am package -DskipTests
 
 # Stufe 2: laufen
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=build /build/chat-service/target/chat-service-0.1.0-SNAPSHOT.jar app.jar
-# EXPOSE dokumentiert den Port nur. Veröffentlicht wird er NICHT —
-# siehe docker-compose.yml, dort steht bewusst kein ports:-Eintrag.
-EXPOSE 8080
+COPY --from=build /build/batch-writer/target/batch-writer-0.1.0-SNAPSHOT.jar app.jar
+# Der batch-writer lauscht auf keinem Port — er verbindet sich ausgehend
+# mit RabbitMQ und PostgreSQL.
 ENTRYPOINT ["java", "-jar", "app.jar"]
