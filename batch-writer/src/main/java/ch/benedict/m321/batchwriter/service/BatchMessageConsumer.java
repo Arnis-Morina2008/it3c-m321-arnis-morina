@@ -36,15 +36,22 @@ public class BatchMessageConsumer {
     /** Maximale Anzahl Nachrichten in einem Stapel vor dem Schreiben. */
     private static final int BATCH_SIZE = 500;
 
+    /** Pause nach einem Datenbankfehler, damit der Dienst nicht im Millisekundentakt Fehler produziert. */
+    private static final long RETRY_PAUSE_MILLISECONDS = 1000;
+
     private final MessageBatchRepository messageBatchRepository;
 
     /**
      * Interner Zwischenspeicher fuer empfangene Nachrichten zusammen mit
      * den Informationen zur RabbitMQ-Bestaetigung.
+     *
+     * Der Kanal gehoert dazu, weil RabbitMQ eine Nachricht nur auf dem Kanal
+     * bestaetigen laesst, auf dem sie zugestellt wurde.
      */
     private record QueuedMessage(ChatMessage message, Channel channel, long deliveryTag) {
     }
 
+    /** Die Nachrichten, die noch nicht in der Datenbank sind. Zugriff nur in synchronized (buffer). */
     private final List<QueuedMessage> buffer = new ArrayList<>();
 
     /**
@@ -91,79 +98,135 @@ public class BatchMessageConsumer {
     /**
      * Schreibt den aktuellen Inhalt des Puffers in die Datenbank und
      * bestaetigt alle enthaltenen Nachrichten bei RabbitMQ.
+     *
+     * synchronized, weil zwei Threads flush() aufrufen: der Timer und der
+     * Listener bei vollem Puffer. Es soll immer nur ein Stapel gleichzeitig
+     * geschrieben werden.
      */
     public synchronized void flush() {
-        List<QueuedMessage> messagesToFlush;
-
-        synchronized (buffer) {
-            if (buffer.isEmpty()) {
-                return;
-            }
-            messagesToFlush = new ArrayList<>(buffer);
-            buffer.clear();
+        List<QueuedMessage> batch = takeAllFromBuffer();
+        if (batch.isEmpty()) {
+            return;
         }
 
-        int count = messagesToFlush.size();
-        List<ChatMessage> chatMessages = new ArrayList<>(count);
-
-        for (QueuedMessage queued : messagesToFlush) {
-            ChatMessage message = queued.message();
-            chatMessages.add(message);
-        }
-
-        log.debug("Flushing batch of {} messages to database", count);
+        List<ChatMessage> chatMessages = extractChatMessages(batch);
+        log.debug("Flushing batch of {} messages to database", batch.size());
 
         try {
             messageBatchRepository.saveBatch(chatMessages);
+        } catch (RuntimeException databaseError) {
+            // Szenario S7: Datenbank nicht erreichbar. Nichts bestaetigen, alles zurueck in die Queue.
+            log.warn("Database not reachable, {} messages go back to the queue: {}",
+                    batch.size(), databaseError.getMessage());
+            pauseBeforeRetry();
+            requeueAll(batch);
+            return;
+        }
 
-            // Nach erfolgreichem Insert ermitteln wir den hoechsten DeliveryTag pro Kanal
-            Map<Channel, Long> maxTagPerChannel = new HashMap<>();
-            for (QueuedMessage queued : messagesToFlush) {
-                Channel channel = queued.channel();
-                long tag = queued.deliveryTag();
-                Long existingMax = maxTagPerChannel.get(channel);
-                if (existingMax == null || tag > existingMax) {
-                    maxTagPerChannel.put(channel, tag);
-                }
-            }
+        acknowledgeAll(batch);
+    }
 
-            // Mit multiple=true bestaetigen wir alle Nachrichten bis zu diesem Tag auf einmal
-            for (Map.Entry<Channel, Long> entry : maxTagPerChannel.entrySet()) {
-                Channel channel = entry.getKey();
-                long maxTag = entry.getValue();
-                channel.basicAck(maxTag, true);
-            }
+    /**
+     * Nimmt alle Nachrichten aus dem Puffer heraus und leert ihn.
+     *
+     * Danach kann der Listener sofort neue Nachrichten puffern, waehrend
+     * dieser Stapel noch geschrieben wird.
+     */
+    private List<QueuedMessage> takeAllFromBuffer() {
+        synchronized (buffer) {
+            List<QueuedMessage> batch = new ArrayList<>(buffer);
+            buffer.clear();
+            return batch;
+        }
+    }
 
-        } catch (Exception exception) {
-            log.error("Failed to persist batch of {} messages, requeuing via NACK", count, exception);
+    /**
+     * Holt aus den gepufferten Eintraegen nur die Nachrichten heraus,
+     * denn das Repository braucht weder Kanal noch Delivery-Tag.
+     */
+    private List<ChatMessage> extractChatMessages(List<QueuedMessage> batch) {
+        List<ChatMessage> chatMessages = new ArrayList<>(batch.size());
+        for (QueuedMessage queued : batch) {
+            ChatMessage message = queued.message();
+            chatMessages.add(message);
+        }
+        return chatMessages;
+    }
 
+    /**
+     * Bestaetigt einen gespeicherten Stapel bei RabbitMQ.
+     *
+     * Mit multiple=true bestaetigt ein einziger Aufruf alle Nachrichten bis zum
+     * hoechsten Tag des Kanals. Das ist richtig, weil der Stapel alle Nachrichten
+     * enthaelt, die dieser Kanal bis dahin geliefert hat.
+     */
+    private void acknowledgeAll(List<QueuedMessage> batch) {
+        Map<Channel, Long> highestTagPerChannel = findHighestTagPerChannel(batch);
+
+        for (Map.Entry<Channel, Long> entry : highestTagPerChannel.entrySet()) {
+            Channel channel = entry.getKey();
+            long highestTag = entry.getValue();
             try {
-                // Kurze Pause gegen CPU-Spins, wenn die Datenbank voruebergehend offline ist (Szenario S7)
-                Thread.sleep(1000);
-            } catch (InterruptedException interruptedException) {
-                Thread.currentThread().interrupt();
+                channel.basicAck(highestTag, true);
+            } catch (IOException acknowledgeError) {
+                // RabbitMQ liefert die Nachrichten erneut, ON CONFLICT verwirft die Duplikate.
+                log.error("Failed to send ACK to RabbitMQ", acknowledgeError);
             }
+        }
+    }
 
-            Map<Channel, Long> maxTagPerChannel = new HashMap<>();
-            for (QueuedMessage queued : messagesToFlush) {
-                Channel channel = queued.channel();
-                long tag = queued.deliveryTag();
-                Long existingMax = maxTagPerChannel.get(channel);
-                if (existingMax == null || tag > existingMax) {
-                    maxTagPerChannel.put(channel, tag);
-                }
-            }
+    /**
+     * Gibt einen Stapel, der nicht gespeichert werden konnte, an RabbitMQ zurueck.
+     *
+     * requeue=true: RabbitMQ stellt die Nachrichten erneut zu, und der naechste
+     * Versuch beginnt. So geht bei einem Datenbankausfall nichts verloren.
+     */
+    private void requeueAll(List<QueuedMessage> batch) {
+        Map<Channel, Long> highestTagPerChannel = findHighestTagPerChannel(batch);
 
-            for (Map.Entry<Channel, Long> entry : maxTagPerChannel.entrySet()) {
-                Channel channel = entry.getKey();
-                long maxTag = entry.getValue();
-                try {
-                    // requeue = true, damit RabbitMQ die Nachrichten erneut zulaesst
-                    channel.basicNack(maxTag, true, true);
-                } catch (IOException ioException) {
-                    log.error("Failed to send NACK to RabbitMQ", ioException);
-                }
+        for (Map.Entry<Channel, Long> entry : highestTagPerChannel.entrySet()) {
+            Channel channel = entry.getKey();
+            long highestTag = entry.getValue();
+            try {
+                channel.basicNack(highestTag, true, true);
+            } catch (IOException requeueError) {
+                // Bricht die Verbindung ab, stellt RabbitMQ unbestaetigte Nachrichten ohnehin erneut zu.
+                log.error("Failed to send NACK to RabbitMQ", requeueError);
             }
+        }
+    }
+
+    /**
+     * Sucht pro Kanal den hoechsten Delivery-Tag im Stapel.
+     *
+     * Delivery-Tags zaehlen pro Kanal hoch. Mit zwei Kanaelen (zum Beispiel nach
+     * einem Verbindungsabbruch) braucht jeder Kanal seine eigene Bestaetigung.
+     */
+    private Map<Channel, Long> findHighestTagPerChannel(List<QueuedMessage> batch) {
+        Map<Channel, Long> highestTagPerChannel = new HashMap<>();
+
+        for (QueuedMessage queued : batch) {
+            Channel channel = queued.channel();
+            long tag = queued.deliveryTag();
+            Long highestSoFar = highestTagPerChannel.get(channel);
+            if (highestSoFar == null || tag > highestSoFar) {
+                highestTagPerChannel.put(channel, tag);
+            }
+        }
+        return highestTagPerChannel;
+    }
+
+    /**
+     * Wartet kurz nach einem Datenbankfehler.
+     *
+     * Ohne Pause wuerde RabbitMQ die Nachrichten sofort wieder liefern, und der
+     * Dienst wuerde bei einem Ausfall die CPU mit Fehlversuchen auslasten.
+     */
+    private void pauseBeforeRetry() {
+        try {
+            Thread.sleep(RETRY_PAUSE_MILLISECONDS);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
         }
     }
 }

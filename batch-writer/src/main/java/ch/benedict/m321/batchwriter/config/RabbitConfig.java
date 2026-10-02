@@ -6,6 +6,8 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
+import org.springframework.amqp.support.converter.Jackson2JavaTypeMapper;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
@@ -22,7 +24,17 @@ import org.springframework.context.annotation.Configuration;
 public class RabbitConfig {
 
     /**
+     * So viele unbestaetigte Nachrichten liefert RabbitMQ hoechstens auf Vorrat.
+     * Gleich gross wie ein Stapel: genug fuer einen vollen Stapel, aber nie mehr,
+     * als bei einem Absturz erneut zugestellt werden muss.
+     */
+    private static final int PREFETCH_COUNT = 500;
+
+    /**
      * Deklariert die Schreib-Queue chat.persist mit Dead-Letter-Routing.
+     *
+     * Die Argumente muessen genau gleich sein wie im chat-service. Sonst lehnt
+     * RabbitMQ die zweite Deklaration mit PRECONDITION_FAILED ab.
      */
     @Bean
     public Queue persistQueue() {
@@ -33,7 +45,7 @@ public class RabbitConfig {
     }
 
     /**
-     * Deklariert die Dead-Letter-Queue fuer fehlerhafte Nachrichten.
+     * Deklariert die Dead-Letter-Queue fuer Nachrichten, die nie gespeichert werden koennen.
      */
     @Bean
     public Queue deadLetterQueue() {
@@ -43,16 +55,18 @@ public class RabbitConfig {
     /**
      * Konvertiert eingehende JSON-Nachrichten in ChatMessage-Records.
      *
-     * Mit TypePrecedence.INFERRED wird der Zieltyp automatisch aus der Methodensignatur
-     * des @RabbitListener abgeleitet. Dadurch koennen auch Nachrichten verarbeitet werden,
-     * die keinen Spring-spezifischen __TypeId__-Header besitzen (Szenario S5).
+     * Der chat-service schreibt in den Header __TypeId__ seinen eigenen Klassennamen
+     * (ch.benedict.m321.chatservice.dto.ChatMessage). Diese Klasse gibt es hier nicht.
+     * Mit TypePrecedence.INFERRED nimmt der Konverter den Zieltyp deshalb aus der
+     * Methodensignatur des @RabbitListener und ignoriert den Header. Das funktioniert
+     * auch, wenn der Header ganz fehlt (Szenario S5).
      */
     @Bean
     public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
+        DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+        typeMapper.setTypePrecedence(Jackson2JavaTypeMapper.TypePrecedence.INFERRED);
+
         Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter(objectMapper);
-        org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper typeMapper =
-                new org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper();
-        typeMapper.setTypePrecedence(org.springframework.amqp.support.converter.Jackson2JavaTypeMapper.TypePrecedence.INFERRED);
         converter.setJavaTypeMapper(typeMapper);
         return converter;
     }
@@ -73,7 +87,7 @@ public class RabbitConfig {
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(jsonMessageConverter);
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-        factory.setPrefetchCount(500);
+        factory.setPrefetchCount(PREFETCH_COUNT);
 
         return factory;
     }

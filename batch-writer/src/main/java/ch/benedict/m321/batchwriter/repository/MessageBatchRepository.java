@@ -56,7 +56,14 @@ public class MessageBatchRepository {
 
         int messageCount = messages.size();
 
+        // Der BatchPreparedStatementSetter beantwortet JdbcTemplate zwei Fragen:
+        // wie viele Zeilen es gibt und welche Werte in Zeile Nummer index gehoeren.
         jdbcTemplate.batchUpdate(INSERT_SQL, new BatchPreparedStatementSetter() {
+
+            /**
+             * Setzt die sechs Platzhalter (?) im INSERT fuer eine einzelne Nachricht.
+             * JdbcTemplate ruft diese Methode einmal pro Nachricht im Stapel auf.
+             */
             @Override
             public void setValues(PreparedStatement preparedStatement, int index) throws SQLException {
                 ChatMessage message = messages.get(index);
@@ -71,6 +78,9 @@ public class MessageBatchRepository {
                 preparedStatement.setTimestamp(6, sentTimestamp);
             }
 
+            /**
+             * Sagt JdbcTemplate, wie oft setValues aufgerufen werden muss.
+             */
             @Override
             public int getBatchSize() {
                 return messageCount;

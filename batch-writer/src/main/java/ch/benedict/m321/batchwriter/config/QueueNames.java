@@ -14,7 +14,9 @@ public final class QueueNames {
     /** Dead-Letter-Queue fuer endgueltig nicht verarbeitbare Nachrichten. */
     public static final String DEAD_LETTER_QUEUE = "chat.dlq";
 
+    /**
+     * Privater Konstruktor: Die Klasse ist eine reine Namenssammlung und wird nie instanziiert.
+     */
     private QueueNames() {
-        // Reine Namenssammlung, wird nie instanziiert.
     }
 }
