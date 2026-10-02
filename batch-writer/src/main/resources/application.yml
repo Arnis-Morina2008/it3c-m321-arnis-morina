@@ -13,6 +13,11 @@ spring:
     username: ${POSTGRES_USER:chat}
     password: ${POSTGRES_PASSWORD:guest}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # Ist die Datenbank weg, nach 5 s aufgeben statt nach den vorgegebenen 30 s.
+      # Dann gibt der batch-writer die Nachrichten zurueck in die Queue und versucht
+      # es erneut (Szenario S7, Spezifikation 4.5).
+      connection-timeout: 5000
 
 logging:
   level:

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.QueueInformation;
@@ -13,14 +14,18 @@ import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -37,9 +42,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * und bestaetigt den Empfang.
  *
  * Das Schema kommt aus derselben Datei postgres/init.sql wie im Docker-Stack.
+ *
+ * OutputCaptureExtension faengt die Log-Ausgabe ab. Der Ausfall-Test prueft damit,
+ * dass der batch-writer den Ausfall wirklich bemerkt hat.
  */
 @SpringBootTest
 @Testcontainers
+@ExtendWith(OutputCaptureExtension.class)
 class BatchMessageConsumerIntegrationTest {
 
     /** Das Schema des Stacks, relativ zum Modulordner batch-writer/. */
@@ -137,31 +146,35 @@ class BatchMessageConsumerIntegrationTest {
      * Szenario S7: Vorübergehender Ausfall der Datenbank.
      * Erwartet: Keine Nachricht geht verloren, nach Wiederverfügbarkeit landet sie
      * automatisch in der Tabelle, ohne dass der batch-writer manuell neugestartet werden muss.
+     * Waehrend des Ausfalls darf nichts in chat.dlq landen, denn die Nachricht ist in Ordnung.
+     *
+     * Der Ausfall ist echt: Alle Verbindungen werden getrennt und neue verboten,
+     * wie bei "docker compose stop postgres".
      */
     @Test
-    void recoversFromDatabaseOutageWithoutManualRestart() throws JsonProcessingException {
+    void recoversFromDatabaseOutageWithoutManualRestart(CapturedOutput output) throws Exception {
         UUID messageId = UUID.randomUUID();
         ChatMessage message = new ChatMessage(
                 messageId, TEST_ROOM_ID, "user-outage", "Max", "Nachricht waehrend Ausfall", Instant.now());
 
-        // Datenbankausfall simulieren durch Umbenennen der Tabelle
-        jdbcTemplate.execute("ALTER TABLE message RENAME TO message_unavailable;");
-
-        // Nachricht senden, waehrend DB nicht schreiben kann
-        sendChatMessage(message);
-
-        // Kurze Pause: Consumer versucht zu schreiben, scheitert, sendet NACK mit requeue
+        blockDatabaseConnections();
         try {
-            Thread.sleep(1500);
-        } catch (InterruptedException interruptedException) {
-            Thread.currentThread().interrupt();
+            sendChatMessage(message);
+
+            // Der batch-writer muss den Ausfall bemerken und die Nachricht zurueck in die Queue geben
+            await().atMost(Duration.ofSeconds(20)).until(() -> {
+                String log = output.getOut();
+                return log.contains("Database not reachable");
+            });
+        } finally {
+            // Auch wenn der Test scheitert: Die Datenbank muss fuer die anderen Tests wieder da sein
+            allowDatabaseConnections();
         }
 
-        // Datenbank wiederherstellen
-        jdbcTemplate.execute("ALTER TABLE message_unavailable RENAME TO message;");
-
-        // Warten, bis der Consumer die Nachricht im naechsten Versuch erfolgreich speichert
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+        // Ohne Neustart: Der naechste Versuch nach dem Ausfall muss gelingen.
+        // ignoreExceptions: Auch der Test fragt ueber den Verbindungspool ab, und der kann
+        // direkt nach dem Ausfall noch eine getrennte Verbindung liefern.
+        await().atMost(Duration.ofSeconds(30)).ignoreExceptions().untilAsserted(() -> {
             int count = countMessagesWithId(messageId);
             assertEquals(1, count);
         });
@@ -169,6 +182,7 @@ class BatchMessageConsumerIntegrationTest {
         String savedContent = jdbcTemplate.queryForObject(
                 "SELECT content FROM message WHERE id = ?", String.class, messageId);
         assertEquals("Nachricht waehrend Ausfall", savedContent);
+        assertEquals(0, countDeadLetterMessages());
     }
 
     /**
@@ -230,6 +244,36 @@ class BatchMessageConsumerIntegrationTest {
             assertEquals(1, countDeadLetterMessages());
         });
         assertEquals(0, countMessagesWithId(invalidMessageId));
+    }
+
+    /**
+     * Simuliert den Ausfall der Datenbank: Neue Verbindungen werden verboten, alle
+     * bestehenden getrennt. Fuer den batch-writer sieht das aus wie ein gestoppter Server.
+     */
+    private void blockDatabaseConnections() throws IOException, InterruptedException {
+        String databaseName = postgres.getDatabaseName();
+        runAsDatabaseAdministrator("ALTER DATABASE " + databaseName + " ALLOW_CONNECTIONS false");
+        runAsDatabaseAdministrator(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" + databaseName + "'");
+    }
+
+    /**
+     * Beendet den simulierten Ausfall: Neue Verbindungen sind wieder erlaubt.
+     */
+    private void allowDatabaseConnections() throws IOException, InterruptedException {
+        String databaseName = postgres.getDatabaseName();
+        runAsDatabaseAdministrator("ALTER DATABASE " + databaseName + " ALLOW_CONNECTIONS true");
+    }
+
+    /**
+     * Fuehrt einen SQL-Befehl mit psql direkt im Container aus, verbunden mit der
+     * Verwaltungsdatenbank "postgres". So funktioniert er auch, waehrend die
+     * Chat-Datenbank keine Verbindungen annimmt.
+     */
+    private void runAsDatabaseAdministrator(String sql) throws IOException, InterruptedException {
+        String databaseUser = postgres.getUsername();
+        ExecResult result = postgres.execInContainer("psql", "-U", databaseUser, "-d", "postgres", "-c", sql);
+        assertEquals(0, result.getExitCode(), result.getStderr());
     }
 
     /**
