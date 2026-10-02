@@ -161,8 +161,10 @@ Abschnitt 4.6 und 4.7). Die folgenden Aufgaben beheben das.
 ### Task 14: Nicht speicherbare Nachrichten in die DLQ legen
 * **Warum an dieser Stelle:** Ohne diesen Schritt blockiert eine einzige kaputte Nachricht ihren ganzen Stapel fuer immer. Braucht die atomaren Stapel aus Task 12 und die kurzen Methoden aus Task 13.
 * **Dateien:**
-  * Aendern: `BatchMessageConsumer.java`
+  * Aendern: `BatchMessageConsumer.java` (JSON selbst lesen, Pflichtfelder pruefen, Datenfehler einzeln nachschreiben)
+  * Aendern: `RabbitConfig.java` (`Jackson2JsonMessageConverter` entfernen)
   * Test: `BatchMessageConsumerIntegrationTest` mit drei neuen Tests: unvollstaendige Nachricht, kein gueltiges JSON, zu langer `senderName` neben einer gueltigen Nachricht
+* **Nachtrag waehrend der Umsetzung:** Der Test mit ungueltigem JSON fand 4 statt 1 Nachricht in der DLQ. Der Konverter von Spring lehnt bei einem Fehler alle unbestaetigten Nachrichten des Kanals ab (Spezifikation 2.4). Deshalb liest der Listener das JSON jetzt selbst.
 * **Commit:** `feat: nicht speicherbare Nachrichten in die DLQ legen`
 
 ### Task 15: Ausfall-Test mit echtem Verbindungsabbruch

@@ -78,8 +78,9 @@ Ich habe den Vertrag nicht aus der Planung abgeschrieben, sondern an zwei Stelle
 `sentAt` kommt mit Nanosekunden (9 Stellen). PostgreSQL speichert Mikrosekunden; die letzten drei Stellen fallen beim Speichern weg. Für die Sortierung eines Chats ist das unerheblich.
 
 ### 2.4 Header
-* `content_type: application/json` ist der einzige Header, auf den sich der `batch-writer` verlässt.
-* Der Header `__TypeId__` enthält den Klassennamen **des chat-service** (`ch.benedict.m321.chatservice.dto.ChatMessage`). Diese Klasse gibt es im `batch-writer` nicht. Deshalb steht der Konverter auf `TypePrecedence.INFERRED`: Der Zieltyp kommt aus der Signatur der Listener-Methode, der Header wird ignoriert. Das gilt auch, wenn der Header ganz fehlt (Szenario S5).
+* Der `batch-writer` liest den Body **selbst** mit dem `ObjectMapper` von Spring Boot in den Record `ChatMessage`. Er schaut dabei **keinen Header** an.
+* Der Header `__TypeId__` enthält den Klassennamen **des chat-service** (`ch.benedict.m321.chatservice.dto.ChatMessage`). Diese Klasse gibt es im `batch-writer` nicht. Weil der Header ignoriert wird, spielt das keine Rolle, auch nicht, wenn er ganz fehlt (Szenario S5: nur `content_type`).
+* Warum kein `Jackson2JsonMessageConverter` von Spring: Die erste Fassung hat ihn benutzt. Ein Test mit ungültigem JSON hat gezeigt, dass Spring AMQP bei einem Umwandlungsfehler im Modus `MANUAL` die Nachricht mit `basicNack(höchster Tag, multiple=true, requeue=false)` ablehnt (nachgeprüft in `BlockingQueueConsumer.rollbackOnExceptionIfNecessary`, spring-rabbit 3.2.12). Das legt **alle** unbestätigten Nachrichten des Kanals in die DLQ, also auch gültige, die noch im Puffer auf den nächsten Stapel warten. Liest der Listener selbst, kann er genau die eine kaputte Nachricht ablehnen.
 
 ### 2.5 Was der batch-writer NICHT voraussetzt
 Weil jeder mit Zugang zum Broker direkt in `chat.persist` schreiben kann (Szenario S5 tut genau das), verlässt sich der `batch-writer` nicht auf die Validierung im `chat-service`. Er prüft selbst, ob alle sechs Pflichtfelder vorhanden sind (Abschnitt 4.6).
@@ -149,7 +150,7 @@ Diese Werte sind bewusst **keine** Umgebungsvariablen. Sie hängen zusammen und 
 ## 4. Verhalten im Normal- und Fehlerfall
 
 ### 4.1 Normalfall (Szenario S3)
-* Nachrichten treffen über `chat.persist` ein. `onMessage()` prüft die Pflichtfelder und legt die Nachricht zusammen mit Kanal und Delivery-Tag in den Puffer.
+* Nachrichten treffen über `chat.persist` ein. `onMessage()` liest das JSON, prüft die Pflichtfelder und legt die Nachricht zusammen mit Kanal und Delivery-Tag in den Puffer.
 * Bei 500 Nachrichten ruft `onMessage()` selbst `flush()` auf, sonst tut es der 200-ms-Timer.
 * `flush()` nimmt den ganzen Puffer heraus und übergibt die Nachrichten an `MessageBatchRepository.saveBatch()`. Dieses führt ein `jdbcTemplate.batchUpdate()` innerhalb von `@Transactional` aus: **ein Stapel, eine Transaktion**.
 * Nach dem Commit bestätigt `flush()` pro Kanal den höchsten Delivery-Tag mit `basicAck(tag, multiple=true)`. Das bestätigt alle Nachrichten des Stapels mit einem Aufruf.
@@ -180,8 +181,9 @@ Diese Werte sind bewusst **keine** Umgebungsvariablen. Sie hängen zusammen und 
 * Erwartung für S7: 15 s Ausfall plus höchstens 5 s Timeout plus 1 s Pause, also alle 300 Nachrichten nach etwa 25 s in der Tabelle.
 
 ### 4.6 Unvollständige oder unlesbare Nachricht
-* **Kein gültiges JSON** (oder ein Feld im falschen Format, z.B. `id` ist keine UUID): Die Umwandlung scheitert, bevor `onMessage()` aufgerufen wird. Der `ConditionalRejectingErrorHandler` von Spring AMQP lehnt die Nachricht mit `requeue=false` ab, sie landet in `chat.dlq`.
-* **Pflichtfeld fehlt** (z.B. kein `content`): `onMessage()` prüft die sechs Felder. Fehlt eines, lehnt es die Nachricht sofort mit `basicReject(tag, requeue=false)` ab, sie landet in `chat.dlq` und kommt gar nicht erst in den Puffer.
+* **Kein gültiges JSON** (oder ein Feld im falschen Format, z.B. `id` ist keine UUID): `ObjectMapper.readValue()` wirft eine `IOException`. `onMessage()` lehnt genau diese Nachricht mit `basicReject(tag, requeue=false)` ab, sie landet in `chat.dlq`.
+* **Pflichtfeld fehlt** (z.B. kein `content`): `onMessage()` prüft die sechs Felder. Fehlt eines, lehnt es die Nachricht ebenso mit `basicReject(tag, requeue=false)` ab.
+* In beiden Fällen kommt die Nachricht gar nicht erst in den Puffer, und die gültigen Nachrichten im Puffer bleiben unberührt (Begründung in Abschnitt 2.4).
 * Begründung: Eine solche Nachricht wird auch beim hundertsten Versuch nicht gültig. Ohne Ablehnung würde sie den ganzen Stapel, in dem sie steht, für immer blockieren.
 
 ### 4.7 Nachricht, die die Datenbank ablehnt
