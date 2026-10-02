@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -38,9 +39,16 @@ public class MessageBatchRepository {
     /**
      * Schreibt eine Liste von Nachrichten in einem einzigen Datenbank-Aufruf (Bulk-Insert).
      *
+     * Warum @Transactional: Ohne diese Annotation laeuft batchUpdate im Autocommit,
+     * und der PostgreSQL-Treiber teilt einen Stapel von 500 Nachrichten in mehrere
+     * Transaktionen auf. Mit @Transactional ist ein Stapel genau eine Transaktion:
+     * entweder sind alle Nachrichten gespeichert oder keine. Nur dann darf der
+     * Consumer danach den ganzen Stapel bestaetigen (Szenario S4).
+     *
      * @param messages die Liste der zu speichernden Nachrichten
      * @return Anzahl der uebergebenen Nachrichten
      */
+    @Transactional
     public int saveBatch(List<ChatMessage> messages) {
         if (messages == null || messages.isEmpty()) {
             return 0;

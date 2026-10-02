@@ -119,6 +119,30 @@ class MessageBatchRepositoryIntegrationTest {
     }
 
     /**
+     * Szenario S4 zaehlt Transaktionen. Ein voller Stapel von 500 Nachrichten
+     * muss deshalb in genau einer Transaktion landen.
+     *
+     * PostgreSQL schreibt in jede Zeile die Nummer der Transaktion, die sie
+     * eingefuegt hat (Systemspalte xmin). Haben alle 500 Zeilen dieselbe
+     * Nummer, war es genau eine Transaktion.
+     */
+    @Test
+    void writesWholeBatchInOneTransaction() {
+        List<ChatMessage> batch = new ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            ChatMessage message = new ChatMessage(
+                    UUID.randomUUID(), TEST_ROOM_ID, "user-" + i, "Tester", "Nachricht " + i, Instant.now());
+            batch.add(message);
+        }
+
+        messageBatchRepository.saveBatch(batch);
+
+        Integer transactionCount = jdbcTemplate.queryForObject(
+                "SELECT count(DISTINCT xmin::text) FROM message", Integer.class);
+        assertEquals(1, transactionCount);
+    }
+
+    /**
      * Der chat-service nimmt jede roomId an, und Raeume legt noch niemand an.
      * Eine Nachricht fuer einen Raum, der nicht in der Tabelle room steht, muss
      * trotzdem gespeichert werden. Sonst scheitert ihr ganzer Stapel.
