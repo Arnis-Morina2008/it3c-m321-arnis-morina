@@ -117,4 +117,24 @@ class MessageBatchRepositoryIntegrationTest {
                 "SELECT content FROM message WHERE id = ?", String.class, duplicateId);
         assertEquals("Erste Version", savedContent);
     }
+
+    /**
+     * Der chat-service nimmt jede roomId an, und Raeume legt noch niemand an.
+     * Eine Nachricht fuer einen Raum, der nicht in der Tabelle room steht, muss
+     * trotzdem gespeichert werden. Sonst scheitert ihr ganzer Stapel.
+     */
+    @Test
+    void savesMessageForRoomThatIsNotInRoomTable() {
+        UUID unknownRoomId = UUID.randomUUID();
+        ChatMessage message = new ChatMessage(
+                UUID.randomUUID(), unknownRoomId, "user-1", "Anna", "Hallo", Instant.now());
+
+        List<ChatMessage> batch = new ArrayList<>();
+        batch.add(message);
+        messageBatchRepository.saveBatch(batch);
+
+        Integer databaseCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM message WHERE room_id = ?", Integer.class, unknownRoomId);
+        assertEquals(1, databaseCount);
+    }
 }

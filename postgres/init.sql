@@ -19,9 +19,14 @@ CREATE TABLE IF NOT EXISTS room_member (
 );
 
 -- Chat-Nachrichten (gespeichert vom batch-writer via Bulk-INSERT)
+-- room_id hat bewusst KEINEN Fremdschluessel auf room(id): Raeume legt noch
+-- niemand an, und der chat-service nimmt jede roomId an. Mit Fremdschluessel
+-- scheitert jede Nachricht fuer einen unbekannten Raum und mit ihr der ganze
+-- Stapel. Ob ein Raum existiert, prueft spaeter die Stelle, die Nachrichten
+-- annimmt. Begruendung: docs/spec-batch-writer.md, Abschnitt 3.2.
 CREATE TABLE IF NOT EXISTS message (
     id UUID PRIMARY KEY,
-    room_id UUID NOT NULL REFERENCES room(id) ON DELETE CASCADE,
+    room_id UUID NOT NULL,
     sender_id VARCHAR(255) NOT NULL,
     sender_name VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
