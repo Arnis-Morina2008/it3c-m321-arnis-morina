@@ -7,6 +7,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.MountableFile;
 
 /**
  * Prueft, dass der Spring-Kontext des batch-writer mit echten
@@ -16,9 +17,13 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 class BatchWriterApplicationTest {
 
+    /** Das Schema des Stacks, relativ zum Modulordner batch-writer/. */
+    private static final MountableFile SCHEMA_FILE = MountableFile.forHostPath("../postgres/init.sql");
+
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+            .withCopyFileToContainer(SCHEMA_FILE, "/docker-entrypoint-initdb.d/init.sql");
 
     @Container
     @ServiceConnection

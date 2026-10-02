@@ -14,6 +14,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.MountableFile;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -28,14 +29,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * Eine Nachricht wird in die Queue chat.persist geschickt. Der BatchMessageConsumer
  * liest sie, puffert sie, fuehrt nach maximal 200 ms den Bulk-Insert aus
  * und bestaetigt den Empfang.
+ *
+ * Das Schema kommt aus derselben Datei postgres/init.sql wie im Docker-Stack.
  */
 @SpringBootTest
 @Testcontainers
 class BatchMessageConsumerIntegrationTest {
 
+    /** Das Schema des Stacks, relativ zum Modulordner batch-writer/. */
+    private static final MountableFile SCHEMA_FILE = MountableFile.forHostPath("../postgres/init.sql");
+
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+            .withCopyFileToContainer(SCHEMA_FILE, "/docker-entrypoint-initdb.d/init.sql");
 
     @Container
     @ServiceConnection
@@ -50,36 +57,15 @@ class BatchMessageConsumerIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /** Der Standard-Raum, den init.sql anlegt. */
     private static final UUID TEST_ROOM_ID = UUID.fromString("3f2b1c4e-0000-0000-0000-000000000001");
 
     /**
-     * Initialisiert vor jedem Test die Datenbanktabellen und leert die RabbitMQ-Queue.
+     * Leert vor jedem Test die Tabelle und die Queue, damit kein Test die Reste eines anderen sieht.
      */
     @BeforeEach
     void setUp() {
-        // Tabellen fuer den Test anlegen
-        jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS room (
-                    id UUID PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                """);
-
-        jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS message (
-                    id UUID PRIMARY KEY,
-                    room_id UUID NOT NULL REFERENCES room(id) ON DELETE CASCADE,
-                    sender_id VARCHAR(255) NOT NULL,
-                    sender_name VARCHAR(255) NOT NULL,
-                    content TEXT NOT NULL,
-                    sent_at TIMESTAMPTZ NOT NULL
-                );
-                """);
-
         jdbcTemplate.execute("DELETE FROM message");
-        jdbcTemplate.execute("DELETE FROM room");
-        jdbcTemplate.update("INSERT INTO room (id, name) VALUES (?, ?)", TEST_ROOM_ID, "General");
 
         // Queue vor dem Test leeren
         rabbitAdmin.purgeQueue(QueueNames.PERSIST_QUEUE);

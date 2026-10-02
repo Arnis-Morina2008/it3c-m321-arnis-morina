@@ -11,6 +11,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.MountableFile;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -26,14 +27,21 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * 1. Der Bulk-Insert speichert alle Nachrichten eines Batches korrekt ab.
  * 2. Nachrichten mit bereits vorhandener ID werden dank ON CONFLICT (id) DO NOTHING
  *    stillschweigend ignoriert und werfen keinen Fehler (Idempotenz).
+ *
+ * Das Schema kommt aus derselben Datei postgres/init.sql wie im Docker-Stack.
+ * So prueft der Test genau die Tabelle, in die der Dienst spaeter schreibt.
  */
 @SpringBootTest
 @Testcontainers
 class MessageBatchRepositoryIntegrationTest {
 
+    /** Das Schema des Stacks, relativ zum Modulordner batch-writer/. */
+    private static final MountableFile SCHEMA_FILE = MountableFile.forHostPath("../postgres/init.sql");
+
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+            .withCopyFileToContainer(SCHEMA_FILE, "/docker-entrypoint-initdb.d/init.sql");
 
     @Container
     @ServiceConnection
@@ -45,39 +53,15 @@ class MessageBatchRepositoryIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /** Der Standard-Raum, den init.sql anlegt. */
     private static final UUID TEST_ROOM_ID = UUID.fromString("3f2b1c4e-0000-0000-0000-000000000001");
 
     /**
-     * Erstellt vor jedem Test das noetige Datenbankschema und bereitet einen Testraum vor.
+     * Leert vor jedem Test die Tabelle, damit jeder Test bei null Zeilen beginnt.
      */
     @BeforeEach
-    void setUpDatabaseSchema() {
-        // Tabellen fuer den Test anlegen
-        jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS room (
-                    id UUID PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                """);
-
-        jdbcTemplate.execute("""
-                CREATE TABLE IF NOT EXISTS message (
-                    id UUID PRIMARY KEY,
-                    room_id UUID NOT NULL REFERENCES room(id) ON DELETE CASCADE,
-                    sender_id VARCHAR(255) NOT NULL,
-                    sender_name VARCHAR(255) NOT NULL,
-                    content TEXT NOT NULL,
-                    sent_at TIMESTAMPTZ NOT NULL
-                );
-                """);
-
-        // Alte Daten aus frueheren Tests loeschen
+    void clearMessageTable() {
         jdbcTemplate.execute("DELETE FROM message");
-        jdbcTemplate.execute("DELETE FROM room");
-
-        // Test-Raum anlegen, damit der Fremdschluessel erfuellt ist
-        jdbcTemplate.update("INSERT INTO room (id, name) VALUES (?, ?)", TEST_ROOM_ID, "General");
     }
 
     /**
