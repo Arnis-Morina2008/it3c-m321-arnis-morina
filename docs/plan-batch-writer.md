@@ -118,3 +118,63 @@ Diese Punkte gelten fuer **jede** Aufgabe in diesem Plan:
   * Aktualisieren: `README.md`
 * **Test:** Vollstaendiger Lauf aller Szenarien S1 bis S8.
 * **Commit:** `docs: README nachfuehren fuer batch-writer`
+
+---
+
+## Nacharbeiten nach der Abschlusspruefung (2. Oktober 2026)
+
+Die Abschlusspruefung aus Task 9 habe ich am 2. Oktober 2026 auf einem frischen Klon
+nachgestellt, diesmal mit **zufaelligen** `roomId`s, weil das Pruefskript keinen Raum aus
+meinem `init.sql` kennen kann. Ergebnis: S3 bis S7 nicht bestanden, **0 Zeilen** in der
+Tabelle. Ursache und Entscheide stehen in der Spezifikation (Abschnitt 3.2 Punkt 5,
+Abschnitt 4.6 und 4.7). Die folgenden Aufgaben beheben das.
+
+### Task 10: Tests verwenden das Schema aus postgres/init.sql
+* **Warum zuerst:** Die Tests haben das Schema bisher selbst angelegt, eine Kopie von `init.sql`. Deshalb blieb der Fremdschluessel-Fehler in den Tests unsichtbar: die Tests haben vor jedem Lauf den passenden Raum eingefuegt. Bevor ich das Schema aendere, muessen die Tests das echte Schema benutzen, sonst pruefen sie die Aenderung nicht.
+* **Dateien:**
+  * Aendern: `MessageBatchRepositoryIntegrationTest.java`, `BatchMessageConsumerIntegrationTest.java`, `BatchWriterApplicationTest.java`
+* **Test:** `mvn test -pl batch-writer` bleibt gruen, die `CREATE TABLE` in den Tests sind weg.
+* **Commit:** `test: Tests verwenden das Schema aus postgres/init.sql`
+
+### Task 11: Fremdschluessel auf room entfernen
+* **Warum an dieser Stelle:** Das ist der Fehler, der S3 bis S7 zum Scheitern bringt. Zuerst ein Test, der mit dem echten Schema rot ist, dann die Aenderung an `init.sql`.
+* **Dateien:**
+  * Aendern: `postgres/init.sql`
+  * Test: `MessageBatchRepositoryIntegrationTest.savesMessageForRoomThatIsNotInRoomTable`
+* **Test:** Der neue Test ist vor der Aenderung rot und danach gruen.
+* **Commit:** `fix: Nachrichten fuer unbekannte Raeume speichern`
+
+### Task 12: Ein Stapel ist genau eine Transaktion
+* **Warum an dieser Stelle:** S4 zaehlt Transaktionen. Ohne `@Transactional` laeuft `batchUpdate` im Autocommit, und der PostgreSQL-Treiber teilt einen Stapel in mehrere Transaktionen auf. Erst mit genau einer Transaktion pro Stapel ist der Stapel auch atomar, und darauf baut Task 14 auf.
+* **Dateien:**
+  * Aendern: `MessageBatchRepository.java`
+  * Test: `MessageBatchRepositoryIntegrationTest.writesWholeBatchInOneTransaction` (alle Zeilen haben dieselbe Transaktions-ID `xmin`)
+* **Commit:** `feat: einen Stapel in genau einer Transaktion schreiben`
+
+### Task 13: BatchMessageConsumer in kurze Methoden aufteilen
+* **Warum an dieser Stelle:** `flush()` war zu lang und enthielt die Suche nach dem hoechsten Delivery-Tag zweimal. Task 14 braucht einen dritten Weg (einzeln schreiben). Vorher aufraeumen, damit die neue Logik in eine kurze, eigene Methode passt. Verhalten aendert sich nicht.
+* **Dateien:**
+  * Aendern: `BatchMessageConsumer.java`, `RabbitConfig.java` (Imports statt voller Klassennamen, Konstante fuer Prefetch), `MessageBatchRepository.java` (Kommentare an den Methoden der anonymen Klasse, CLAUDE.md)
+* **Test:** Die bestehenden Tests bleiben gruen.
+* **Commit:** `refactor: BatchMessageConsumer in kurze Methoden aufteilen`
+
+### Task 14: Nicht speicherbare Nachrichten in die DLQ legen
+* **Warum an dieser Stelle:** Ohne diesen Schritt blockiert eine einzige kaputte Nachricht ihren ganzen Stapel fuer immer. Braucht die atomaren Stapel aus Task 12 und die kurzen Methoden aus Task 13.
+* **Dateien:**
+  * Aendern: `BatchMessageConsumer.java`
+  * Test: `BatchMessageConsumerIntegrationTest` mit drei neuen Tests: unvollstaendige Nachricht, kein gueltiges JSON, zu langer `senderName` neben einer gueltigen Nachricht
+* **Commit:** `feat: nicht speicherbare Nachrichten in die DLQ legen`
+
+### Task 15: Ausfall-Test mit echtem Verbindungsabbruch
+* **Warum an dieser Stelle:** Der bisherige Ausfall-Test hat die Tabelle umbenannt. Das ist ein SQL-Fehler, kein Ausfall: die Verbindung blieb bestehen. Jetzt trennt der Test alle Verbindungen und verbietet neue, wie bei `docker compose stop postgres`. Dazu kommt ein Verbindungs-Timeout von 5 s, damit der Dienst den Ausfall schnell merkt. Kommt nach Task 14, weil der Test auch prueft, dass waehrend des Ausfalls nichts in der DLQ landet.
+* **Dateien:**
+  * Aendern: `batch-writer/src/main/resources/application.yml`
+  * Aendern: `BatchMessageConsumerIntegrationTest.recoversFromDatabaseOutageWithoutManualRestart`
+* **Commit:** `test: Datenbankausfall mit echtem Verbindungsabbruch pruefen`
+
+### Task 16: README nachfuehren und Szenarien erneut pruefen
+* **Warum zum Schluss:** Erst wenn alles gruen ist, stimmt die Beschreibung. Danach laufen S1 bis S8 noch einmal auf einem frischen Klon.
+* **Dateien:**
+  * Aendern: `README.md` (Startbefehl und Testbeschreibung mit Postgres)
+* **Test:** Vollstaendiger Lauf S1 bis S8 auf einem frischen Klon.
+* **Commit:** `docs: README fuer den Stack mit Postgres nachfuehren`
