@@ -27,7 +27,7 @@
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
 
-        <!-- JSON-Unterstuetzung fuer Jackson2JsonMessageConverter -->
+        <!-- Jackson-ObjectMapper: der BatchMessageConsumer liest das JSON damit selbst -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-json</artifactId>

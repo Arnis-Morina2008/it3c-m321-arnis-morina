@@ -1,24 +1,22 @@
 package ch.benedict.m321.batchwriter.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
-import org.springframework.amqp.support.converter.Jackson2JavaTypeMapper;
-import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
-import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
  * Konfiguration von RabbitMQ fuer den batch-writer.
  *
- * Richtet die Queues ein, konfiguriert den JSON-Konverter und erstellt eine
- * ListenerContainerFactory mit manuellem Acknowledgement und prefetch=500,
- * damit Nachrichten erst nach dem erfolgreichen Datenbank-Commit bestaetigt werden.
+ * Richtet die Queues ein und erstellt eine ListenerContainerFactory mit manuellem
+ * Acknowledgement und prefetch=500, damit Nachrichten erst nach dem erfolgreichen
+ * Datenbank-Commit bestaetigt werden.
+ *
+ * Bewusst ohne JSON-Konverter: Der BatchMessageConsumer liest das JSON selbst,
+ * damit er bei einem Fehler genau eine Nachricht ablehnen kann (Spezifikation 2.4).
  */
 @Configuration
 public class RabbitConfig {
@@ -53,25 +51,6 @@ public class RabbitConfig {
     }
 
     /**
-     * Konvertiert eingehende JSON-Nachrichten in ChatMessage-Records.
-     *
-     * Der chat-service schreibt in den Header __TypeId__ seinen eigenen Klassennamen
-     * (ch.benedict.m321.chatservice.dto.ChatMessage). Diese Klasse gibt es hier nicht.
-     * Mit TypePrecedence.INFERRED nimmt der Konverter den Zieltyp deshalb aus der
-     * Methodensignatur des @RabbitListener und ignoriert den Header. Das funktioniert
-     * auch, wenn der Header ganz fehlt (Szenario S5).
-     */
-    @Bean
-    public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
-        DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
-        typeMapper.setTypePrecedence(Jackson2JavaTypeMapper.TypePrecedence.INFERRED);
-
-        Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter(objectMapper);
-        converter.setJavaTypeMapper(typeMapper);
-        return converter;
-    }
-
-    /**
      * Erstellt die ContainerFactory fuer den BatchMessageConsumer.
      *
      * Wichtig:
@@ -79,13 +58,9 @@ public class RabbitConfig {
      * - prefetchCount=500: RabbitMQ liefert bis zu 500 unbestaetigte Nachrichten auf Vorrat.
      */
     @Bean
-    public SimpleRabbitListenerContainerFactory batchContainerFactory(
-            ConnectionFactory connectionFactory,
-            MessageConverter jsonMessageConverter) {
-
+    public SimpleRabbitListenerContainerFactory batchContainerFactory(ConnectionFactory connectionFactory) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(jsonMessageConverter);
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         factory.setPrefetchCount(PREFETCH_COUNT);
 

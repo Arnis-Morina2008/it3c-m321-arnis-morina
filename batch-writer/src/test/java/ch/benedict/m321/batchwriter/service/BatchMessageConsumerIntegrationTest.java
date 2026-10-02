@@ -2,8 +2,13 @@ package ch.benedict.m321.batchwriter.service;
 
 import ch.benedict.m321.batchwriter.config.QueueNames;
 import ch.benedict.m321.batchwriter.dto.ChatMessage;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.core.QueueInformation;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +21,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -39,6 +45,9 @@ class BatchMessageConsumerIntegrationTest {
     /** Das Schema des Stacks, relativ zum Modulordner batch-writer/. */
     private static final MountableFile SCHEMA_FILE = MountableFile.forHostPath("../postgres/init.sql");
 
+    /** Der Klassenname, den der chat-service in den Header __TypeId__ schreibt. */
+    private static final String CHAT_SERVICE_TYPE_ID = "ch.benedict.m321.chatservice.dto.ChatMessage";
+
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
@@ -57,36 +66,40 @@ class BatchMessageConsumerIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    /** Der Standard-Raum, den init.sql anlegt. */
-    private static final UUID TEST_ROOM_ID = UUID.fromString("3f2b1c4e-0000-0000-0000-000000000001");
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    /** Ein Raum, den es in der Tabelle room nicht gibt, wie beim Pruefskript. */
+    private static final UUID TEST_ROOM_ID = UUID.randomUUID();
 
     /**
-     * Leert vor jedem Test die Tabelle und die Queue, damit kein Test die Reste eines anderen sieht.
+     * Leert vor jedem Test die Tabelle und beide Queues, damit kein Test die Reste eines anderen sieht.
      */
     @BeforeEach
     void setUp() {
         jdbcTemplate.execute("DELETE FROM message");
-
-        // Queue vor dem Test leeren
         rabbitAdmin.purgeQueue(QueueNames.PERSIST_QUEUE);
+        rabbitAdmin.purgeQueue(QueueNames.DEAD_LETTER_QUEUE);
     }
 
     /**
-     * Prueft den Regelfall: Eine Nachricht wird aus der Queue konsumiert und in die DB geschrieben.
+     * Szenario S3: Eine Nachricht genau so, wie der chat-service sie schickt, also mit
+     * seinem eigenen Klassennamen im Header __TypeId__. Sie muss in der Tabelle landen.
      */
     @Test
-    void consumesMessageFromQueueAndWritesToDatabase() {
+    void consumesMessageInChatServiceFormatAndWritesToDatabase() {
         UUID messageId = UUID.randomUUID();
-        ChatMessage message = new ChatMessage(
-                messageId, TEST_ROOM_ID, "user-123", "Anna", "Live aus RabbitMQ", Instant.now());
+        String json = String.format("""
+                {"id":"%s","roomId":"%s","senderId":"user-123","senderName":"Anna",\
+                "content":"Live aus RabbitMQ","sentAt":"2026-10-02T13:26:59.737112982Z"}
+                """, messageId, TEST_ROOM_ID);
 
-        // Nachricht in die Queue schicken, genau wie es der chat-service tut
-        rabbitTemplate.convertAndSend(QueueNames.PERSIST_QUEUE, message);
+        MessageProperties properties = createJsonProperties();
+        properties.setHeader("__TypeId__", CHAT_SERVICE_TYPE_ID);
+        sendRawMessage(json, properties);
 
-        // Mit Awaitility warten, bis der Consumer gepuffert, geflusht und committet hat (max. 5 Sekunden)
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            Integer count = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM message WHERE id = ?", Integer.class, messageId);
+            int count = countMessagesWithId(messageId);
             assertEquals(1, count);
         });
 
@@ -103,48 +116,21 @@ class BatchMessageConsumerIntegrationTest {
     @Test
     void handlesDuplicateMessagesWithoutErrorAndDoesNotRouteToDeadLetterQueue() {
         UUID messageId = UUID.randomUUID();
-        String jsonPayload = String.format("""
-                {
-                  "id": "%s",
-                  "roomId": "%s",
-                  "senderId": "anna",
-                  "senderName": "Anna Muster",
-                  "content": "Duplikatstest",
-                  "sentAt": "2026-09-30T14:00:00Z"
-                }
+        String json = String.format("""
+                {"id":"%s","roomId":"%s","senderId":"anna","senderName":"Anna Muster",\
+                "content":"Duplikatstest","sentAt":"2026-09-30T14:00:00Z"}
                 """, messageId, TEST_ROOM_ID);
 
-        byte[] body = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        org.springframework.amqp.core.MessageProperties properties =
-                new org.springframework.amqp.core.MessageProperties();
-        properties.setContentType(org.springframework.amqp.core.MessageProperties.CONTENT_TYPE_JSON);
+        MessageProperties properties = createJsonProperties();
+        sendRawMessage(json, properties);
+        sendRawMessage(json, properties);
 
-        org.springframework.amqp.core.Message amqpMessage =
-                new org.springframework.amqp.core.Message(body, properties);
-
-        // Erste Nachricht senden
-        rabbitTemplate.send(QueueNames.PERSIST_QUEUE, amqpMessage);
-
-        // Identische Nachricht ein zweites Mal senden
-        rabbitTemplate.send(QueueNames.PERSIST_QUEUE, amqpMessage);
-
-        // Warten, bis der Consumer den Batch verarbeitet hat
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            Integer count = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM message WHERE id = ?", Integer.class, messageId);
+            int count = countMessagesWithId(messageId);
             assertEquals(1, count);
         });
 
-        // Sicherstellen, dass nichts in der Dead-Letter-Queue gelandet ist
-        java.util.Properties dlqProperties = rabbitAdmin.getQueueProperties(QueueNames.DEAD_LETTER_QUEUE);
-        int dlqCount = 0;
-        if (dlqProperties != null) {
-            Object countProp = dlqProperties.get(RabbitAdmin.QUEUE_MESSAGE_COUNT);
-            if (countProp instanceof Number number) {
-                dlqCount = number.intValue();
-            }
-        }
-        assertEquals(0, dlqCount);
+        assertEquals(0, countDeadLetterMessages());
     }
 
     /**
@@ -153,7 +139,7 @@ class BatchMessageConsumerIntegrationTest {
      * automatisch in der Tabelle, ohne dass der batch-writer manuell neugestartet werden muss.
      */
     @Test
-    void recoversFromDatabaseOutageWithoutManualRestart() {
+    void recoversFromDatabaseOutageWithoutManualRestart() throws JsonProcessingException {
         UUID messageId = UUID.randomUUID();
         ChatMessage message = new ChatMessage(
                 messageId, TEST_ROOM_ID, "user-outage", "Max", "Nachricht waehrend Ausfall", Instant.now());
@@ -162,7 +148,7 @@ class BatchMessageConsumerIntegrationTest {
         jdbcTemplate.execute("ALTER TABLE message RENAME TO message_unavailable;");
 
         // Nachricht senden, waehrend DB nicht schreiben kann
-        rabbitTemplate.convertAndSend(QueueNames.PERSIST_QUEUE, message);
+        sendChatMessage(message);
 
         // Kurze Pause: Consumer versucht zu schreiben, scheitert, sendet NACK mit requeue
         try {
@@ -176,13 +162,119 @@ class BatchMessageConsumerIntegrationTest {
 
         // Warten, bis der Consumer die Nachricht im naechsten Versuch erfolgreich speichert
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Integer count = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM message WHERE id = ?", Integer.class, messageId);
+            int count = countMessagesWithId(messageId);
             assertEquals(1, count);
         });
 
         String savedContent = jdbcTemplate.queryForObject(
                 "SELECT content FROM message WHERE id = ?", String.class, messageId);
         assertEquals("Nachricht waehrend Ausfall", savedContent);
+    }
+
+    /**
+     * Spezifikation 4.6: Fehlt ein Pflichtfeld (hier content), kann die Nachricht nie
+     * gespeichert werden. Sie muss in chat.dlq landen statt endlos wiederholt zu werden.
+     */
+    @Test
+    void movesIncompleteMessageToDeadLetterQueue() {
+        UUID messageId = UUID.randomUUID();
+        String json = String.format("""
+                {"id":"%s","roomId":"%s","senderId":"anna","senderName":"Anna",\
+                "sentAt":"2026-10-02T10:00:00Z"}
+                """, messageId, TEST_ROOM_ID);
+
+        MessageProperties properties = createJsonProperties();
+        sendRawMessage(json, properties);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            assertEquals(1, countDeadLetterMessages());
+        });
+        assertEquals(0, countMessagesWithId(messageId));
+    }
+
+    /**
+     * Spezifikation 4.6: Ein Body, der kein JSON ist, laesst sich nicht umwandeln.
+     * Er muss in chat.dlq landen.
+     */
+    @Test
+    void movesInvalidJsonToDeadLetterQueue() {
+        MessageProperties properties = createJsonProperties();
+        sendRawMessage("das ist kein JSON", properties);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            assertEquals(1, countDeadLetterMessages());
+        });
+    }
+
+    /**
+     * Spezifikation 4.7: Ein senderName mit 300 Zeichen passt nicht in VARCHAR(255).
+     * Diese eine Nachricht muss in chat.dlq landen, die gueltige Nachricht aus demselben
+     * Stapel muss trotzdem in der Tabelle landen.
+     */
+    @Test
+    void movesUnsavableMessageToDeadLetterQueueAndSavesTheRest() throws JsonProcessingException {
+        UUID validMessageId = UUID.randomUUID();
+        ChatMessage validMessage = new ChatMessage(
+                validMessageId, TEST_ROOM_ID, "anna", "Anna", "Ich bin gueltig", Instant.now());
+
+        UUID invalidMessageId = UUID.randomUUID();
+        String tooLongName = "x".repeat(300);
+        ChatMessage invalidMessage = new ChatMessage(
+                invalidMessageId, TEST_ROOM_ID, "ben", tooLongName, "Mein Name ist zu lang", Instant.now());
+
+        sendChatMessage(invalidMessage);
+        sendChatMessage(validMessage);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertEquals(1, countMessagesWithId(validMessageId));
+            assertEquals(1, countDeadLetterMessages());
+        });
+        assertEquals(0, countMessagesWithId(invalidMessageId));
+    }
+
+    /**
+     * Header, wie sie in Szenario S5 gesetzt werden: nur content_type: application/json.
+     */
+    private MessageProperties createJsonProperties() {
+        MessageProperties properties = new MessageProperties();
+        properties.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        return properties;
+    }
+
+    /**
+     * Schreibt eine ChatMessage als JSON und legt sie mit content_type: application/json
+     * in chat.persist, wie es der chat-service tut.
+     */
+    private void sendChatMessage(ChatMessage message) throws JsonProcessingException {
+        String json = objectMapper.writeValueAsString(message);
+        MessageProperties properties = createJsonProperties();
+        sendRawMessage(json, properties);
+    }
+
+    /**
+     * Legt einen Text unveraendert in chat.persist, ohne den Konverter von Spring.
+     * So kann der Test genau bestimmen, welcher Body und welche Header ankommen.
+     */
+    private void sendRawMessage(String body, MessageProperties properties) {
+        byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+        Message amqpMessage = new Message(bodyBytes, properties);
+        rabbitTemplate.send(QueueNames.PERSIST_QUEUE, amqpMessage);
+    }
+
+    /**
+     * Zaehlt die Zeilen mit dieser ID in der Tabelle message.
+     */
+    private int countMessagesWithId(UUID messageId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM message WHERE id = ?", Integer.class, messageId);
+        return count;
+    }
+
+    /**
+     * Zaehlt die Nachrichten, die in chat.dlq auf einen Menschen warten.
+     */
+    private int countDeadLetterMessages() {
+        QueueInformation deadLetterQueue = rabbitAdmin.getQueueInfo(QueueNames.DEAD_LETTER_QUEUE);
+        return deadLetterQueue.getMessageCount();
     }
 }
