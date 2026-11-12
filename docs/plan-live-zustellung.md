@@ -360,7 +360,52 @@ wiederholen muss:
 * **Test:** Frischer Klon in einem anderen Ordner, `.env` aus `.env.example`,
   `bash docs/abnahme.sh` → alle acht Szenarien bestanden. Ergebnis in «Geprüft und korrigiert».
 * **Commit:** `test: Abnahmeskript fuer die Live-Zustellung`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** `docs/abnahme.sh` gelesen: ein Abschnitt pro Szenario in der Reihenfolge des
+    Auftrags, Lastnachrichten aus einem Hilfscontainer mit Schleife, Passwörter nur aus `.env`,
+    Aufräumen per `trap` auch bei Abbruch. Laut KI im frischen Klon in einem anderen Ordner
+    (Container `frischer-klon-chat-service-…`, `.env` als reine Kopie von `.env.example`):
+    alle acht Szenarien bestanden, etwa 4 Minuten. Zusätzlich selbst im Projektordner auf
+    meinem Stack laufen lassen, Ergebnis:
+
+    | | Erwartet | Gemessen |
+    |---|---|---|
+    | S1 | BUILD SUCCESS | Exit 0 |
+    | S2 | Exit 0, 4 Dienste, 0 Ports | Exit 0, 4 Dienste, 0 Ports |
+    | S3 | a1, a2 je 400/400/aufsteigend, b 0 | a1, a2 je 400/400/aufsteigend, b 0 |
+    | S4 | vorher 2 (Consumer 1 1), nach 30 s 1, persist+dlq 2 | genau so |
+    | S5 | 100 Ereignisse nach 5 s, +100 Zeilen | 100, +100 |
+    | S6 | Queue max ≤ 1000, CS1 5000, CS2 danach ≥ 1 | 1000, 5000, 1 |
+    | S7 | 50 nachgeliefert (1..50), danach live 51 | 50 (genau 1..50), danach 51 |
+    | S8 | 0 Streams, `.env` nicht im Repo | 0, 0 |
+
+  * **Abweichungen, entschieden:**
+    * Containernamen werden mit `docker compose ps` ermittelt statt aus Spezifikation 6
+      übernommen: bleibt. Steht als Eintrag unter «Änderungen am Plan» (Commit `f56adeb`,
+      vor diesem Commit).
+    * S1 mit `env -u MSYS_NO_PATHCONV mvn …`: bleibt. Die Variable schützt unter Git Bash die
+      Pfade für Docker (`/stream`), macht aber den Start von Maven kaputt (`Could not find or
+      load main class …Launcher`). Die KI hat das beim ersten Lauf gefunden und korrigiert.
+      Unter Linux ändert der Zusatz nichts.
+  * **S6 genau 1000:** Das ist keine knappe Messung, sondern die Grenze selbst. `messages` in
+    `rabbitmqctl` zählt bereite und unbestätigte Nachrichten. Bereit können höchstens 900 sein
+    (`x-max-length`), unbestätigt höchstens 100 (Prefetch). Mehr als 1000 ist darum nicht
+    möglich, egal wie lange die Instanz hängt. Ein zusätzlicher Puffer ist nicht nötig.
+  * **Lücke im Skript:** S8 prüft nur Streams und `.env`, nicht «Kommentar über jeder Klasse
+    und Methode». Mit einem kleinen Prüfer selbst durchgesehen: 17 Methoden ohne Kommentar,
+    alle aus dem vorgegebenen Code. Wird im neuen Schritt 6a ergänzt (Eintrag unter
+    «Änderungen am Plan»).
+  * **Aufgefallen, bewusst gelassen:**
+    * Zwei Stacks können nicht gleichzeitig laufen, weil das Netz fest `chat-net` heisst. Die
+      KI hat für den Test im Klon meinen Stack gestoppt. Der Name ist vom Auftrag vorgegeben
+      («im Netz chat-net»), darum bleibt er.
+    * Dabei gingen die Zeilen in Postgres verloren: Die Datenbank hat kein Volume, ein
+      `docker compose down` beginnt leer (Spezifikation batch-writer 3.1). Für die Abnahme egal.
+    * Nach dem Skript laufen zwei chat-service-Instanzen (S6 endet so).
+    * Ob das Skript ein Nichtbestehen wirklich als FEHLER meldet, habe ich nicht mit einer
+      Gegenprobe geprüft (ein Lauf dauert mehrere Minuten). Die Prüfungen im Skript sind
+      dieselben Befehle wie in Spezifikation 6, deren Verhalten bei Fehlern dort mit Beispielen
+      getestet ist.
 
 ---
 
