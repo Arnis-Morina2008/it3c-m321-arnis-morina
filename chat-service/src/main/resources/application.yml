@@ -9,13 +9,23 @@ spring:
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
     # Lebenszeichen zwischen Dienst und Broker alle 10 s (Spezifikation 3.4).
-    # Stirbt eine Instanz hart, merkt RabbitMQ es nach etwa zwei verpassten
-    # Lebenszeichen (~20 s) und löscht ihre exclusive Queue. Der Vorgabewert
-    # von 60 s wäre zu langsam für die 30 s aus S4.
+    # Hängt eine Instanz (docker pause, Netzwerkausfall), bleibt ihre
+    # TCP-Verbindung offen. RabbitMQ merkt es erst nach etwa zwei verpassten
+    # Lebenszeichen (~20 s) und löscht dann ihre exclusive Queue. Mit dem
+    # Vorgabewert von 60 s wären es ~120 s. Ein getöteter Prozess braucht das
+    # nicht: Dessen Verbindung schliesst das Betriebssystem sofort.
     requested-heartbeat: 10s
 
 server:
   port: 8080
+  # Beim Herunterfahren alle Verbindungen sofort trennen (Spezifikation 3.4).
+  # Mit dem Vorgabewert "graceful" wartet Spring bis zu 30 s auf laufende
+  # Anfragen. Offene Streams enden aber nie von selbst, Docker schickt nach
+  # 10 s SIGKILL. Mit "immediate" stoppt Spring den Webserver sofort, schliesst
+  # danach die Verbindung zu RabbitMQ sauber, und RabbitMQ löscht die
+  # exclusive Queue der Instanz. Preis: ein POST /messages, der genau in
+  # diesem Moment läuft, bricht ab.
+  shutdown: immediate
 
 logging:
   level:

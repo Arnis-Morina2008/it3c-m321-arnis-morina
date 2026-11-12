@@ -306,7 +306,41 @@ wiederholen muss:
   * Gleich danach `rabbitmqctl -q list_bindings source_name destination_name | grep -c '^chat\.delivery[[:space:]]'` → 1.
   * `docker compose logs chat-service` → kein SIGKILL-Abbruch, Log „Shutdown“ der Instanz 2.
 * **Commit:** `fix: offene Streams halten das Herunterfahren nicht auf`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** Diff gelesen: nur `application.yml`, `server.shutdown: immediate` mit Kommentar,
+    `requested-heartbeat: 10s` aus Schritt 2 noch drin. `mvn test -pl chat-service` → 28 Tests,
+    0 Fehler. Gegenprobe am Stack: Zwei Instanzen gestartet, gewartet bis beide Queues an
+    `chat.delivery` gebunden sind, einen curl-Client an Instanz 2 gehängt (bekam `:connected`),
+    dann `docker stop` auf Instanz 2:
+
+    | | `graceful` (Gegenprobe) | `immediate` |
+    |---|---|---|
+    | Exit-Code | 137 (SIGKILL) | 143 (sauber auf SIGTERM) |
+    | `docker stop` | 4,1 s | 1,4 s |
+    | Bindungen an `chat.delivery` direkt danach | 1 | 1 |
+    | letzte Logzeile | «Commencing graceful shutdown. Waiting for active requests…» | Stream abgemeldet, WARN «response committed already» |
+
+    Beim ersten Versuch der Gegenprobe war die Messung ungültig: Die Instanzen waren noch nicht
+    hochgefahren («Bindungen vorher: 0»), es hing also kein Stream daran, und auch `graceful`
+    beendete sauber. Danach im Messskript zuerst auf beide Bindungen gewartet und geprüft, dass
+    der Client `:connected` bekommen hat. `application.yml` danach aus einer Sicherung
+    wiederhergestellt und der Stack wieder auf eine Instanz gesetzt.
+  * **Erkenntnis:** Die Bindung war auch nach SIGKILL sofort weg. Spezifikation 3.4 hatte das
+    falsch begründet («RabbitMQ bemerkt SIGKILL erst über den Heartbeat»). Ein getöteter Prozess
+    verliert seine TCP-Verbindungen sofort; der Heartbeat hilft nur bei einer hängenden Instanz
+    (`docker pause`, Netzwerkausfall). Das eigentliche Problem von `graceful` war: jeder Stopp
+    endet mit SIGKILL, und weil Spring den Listener vor dem Webserver stoppt, hängt die Queue bis
+    dahin mit 0 Consumern im Broker. `immediate` behebt beides; der Entscheid bleibt richtig.
+  * **Geändert:**
+    * Kommentar über `requested-heartbeat` in `application.yml` korrigiert: Er hilft bei
+      hängenden Instanzen, nicht bei getöteten. Nur Kommentar, kein Wert. Gehört in diesen
+      Commit, weil der alte Kommentar die Begründung für diesen Schritt falsch erklärte.
+    * Spezifikation 3.4, 4.4 und die Tabelle in Kapitel 5 mit den Messwerten korrigiert
+      (eigener Commit `docs:`).
+  * **Bewusst gelassen:** Die zwei WARN-Zeilen `AsyncRequestTimeoutException … response
+    committed already` beim Herunterfahren. So meldet Spring, dass Tomcat den offenen Stream
+    abgebrochen hat. Das ist mit `immediate` gewollt; sie zu unterdrücken bräuchte eigenen
+    Code für einen Fall, der nur beim Stoppen vorkommt.
 
 ---
 
