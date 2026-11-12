@@ -109,13 +109,17 @@ Spezifikation Live-Zustellung
 
         Sauberes Stoppen (--scale chat-service=1 schickt SIGTERM): Spring schliesst beim Herunterfahren die Verbindung, RabbitMQ löscht die exclusive Queue sofort.
 
-        Hartes Ende (SIGKILL nach 10 s, Absturz): Die TCP-Verbindung wird nicht sauber geschlossen. RabbitMQ bemerkt das erst über den Heartbeat. Der Vorgabewert ist 60 s, nach zwei verpassten Heartbeats wäre das zu spät für die 30 s aus S4. Deshalb spring.rabbitmq.requested-heartbeat: 10s → RabbitMQ erkennt eine tote Verbindung nach höchstens etwa 20 s und löscht die Queue.
+        Hartes Ende (SIGKILL, Absturz des Prozesses): Wird der Prozess getötet, schliesst das Betriebssystem seine TCP-Verbindungen. RabbitMQ merkt das sofort und löscht die exclusive Queue. Gemessen am 12. November 2026: auch nach SIGKILL war die Bindung an chat.delivery sofort weg.
 
-        Warum hartes Ende realistisch ist: Spring Boot 3.5 fährt standardmässig „graceful“ herunter und wartet bis zu 30 s auf laufende Anfragen. Offene SSE-Verbindungen sind laufende Anfragen und enden nie von selbst. Docker schickt aber schon nach 10 s SIGKILL. Danach braucht RabbitMQ über den Heartbeat noch etwa 20 s, zusammen also etwa 30 s: genau an der Grenze von S4, zu knapp.
+        Hängende Instanz (docker pause, Netzwerkausfall): Der Prozess lebt, antwortet aber nicht, die TCP-Verbindung bleibt offen. Nur hier hilft der Heartbeat. Der Vorgabewert ist 60 s; RabbitMQ gibt nach etwa zwei verpassten Heartbeats auf, das wären ~120 s. Deshalb spring.rabbitmq.requested-heartbeat: 10s → RabbitMQ erkennt eine hängende Verbindung nach etwa 20 s und löscht die Queue (Folgen für S6 in 3.5).
+
+        Korrektur vom 12. November 2026: Die erste Fassung behauptete, RabbitMQ bemerke auch einen SIGKILL erst über den Heartbeat. Die Messung in Schritt 5 des Plans hat das widerlegt.
+
+        Warum hartes Ende realistisch ist: Spring Boot 3.5 fährt standardmässig „graceful“ herunter und wartet bis zu 30 s auf laufende Anfragen. Offene SSE-Verbindungen sind laufende Anfragen und enden nie von selbst. Docker schickt aber schon nach 10 s SIGKILL. Gemessen mit graceful und einem offenen Stream: Exit-Code 137 (SIGKILL), letzte Logzeile «Commencing graceful shutdown. Waiting for active requests…». Zwei Folgen: Jeder Stopp endet mit SIGKILL statt sauber, und Spring hat den Listener zu diesem Zeitpunkt schon gestoppt; bis zum SIGKILL hängt die Queue darum mit 0 Consumern im Broker und sammelt Nachrichten, die niemand mehr zustellt. S4 hätte knapp bestanden, weil RabbitMQ den SIGKILL sofort bemerkt, sauber ist das aber nicht.
 
         Ein @PreDestroy, das die Streams schliesst, hilft nicht. Spring fährt in dieser Reihenfolge herunter: 1. ContextClosedEvent, 2. Webserver graceful stoppen (wartet auf offene Anfragen), 3. erst dann Beans zerstören und @PreDestroy aufrufen. @PreDestroy käme also erst nach dem Warten dran. Die Streams müssen vor dem Webserver geschlossen werden.
 
-        Entscheid: server.shutdown: immediate in application.yml. Der Webserver trennt beim Herunterfahren alle Verbindungen sofort. Danach stoppt Spring den Listener und schliesst die Verbindung zu RabbitMQ sauber, RabbitMQ löscht die exclusive Queue sofort. Der Container ist nach etwa 1–2 s weg, weit unter den 10 s bis SIGKILL. Der Heartbeat bleibt trotzdem auf 10 s, für echte Abstürze.
+        Entscheid: server.shutdown: immediate in application.yml. Der Webserver trennt beim Herunterfahren alle Verbindungen sofort. Danach stoppt Spring den Listener und schliesst die Verbindung zu RabbitMQ sauber, RabbitMQ löscht die exclusive Queue sofort. Der Container ist nach etwa 1–2 s weg, weit unter den 10 s bis SIGKILL. Gemessen mit immediate und einem offenen Stream: 1,4 s, Exit-Code 143 (sauber auf SIGTERM beendet), Bindung sofort weg. Der Heartbeat bleibt trotzdem auf 10 s, für hängende Instanzen.
 
         Verworfen: Streams beim ContextClosedEvent schliessen. Das kommt zwar vor dem Webserver, hat aber eine Lücke: Ein Browser mit EventSource verbindet sich nach dem Schliessen automatisch neu. Kommt diese neue Verbindung an, bevor der Webserver keine Anfragen mehr annimmt, wartet das graceful Herunterfahren wieder auf einen offenen Stream. Ausserdem braucht es dafür eine eigene Klasse, immediate ist eine Zeile Konfiguration.
 
@@ -169,7 +173,7 @@ Spezifikation Live-Zustellung
 
     4.4 Skalieren zurück auf eine Instanz (S4):
 
-        Siehe 3.4. Vorher zwei Queues mit je einem Consumer. Beim sauberen Stoppen ist die zweite nach wenigen Sekunden weg (server.shutdown: immediate), bei einem Absturz nach höchstens etwa 20 s (Heartbeat). Beides liegt unter den 30 s aus S4. chat.persist und chat.dlq sind durable und werden nicht angefasst.
+        Siehe 3.4. Vorher zwei Queues mit je einem Consumer. Beim sauberen Stoppen ist die zweite nach wenigen Sekunden weg (server.shutdown: immediate), bei einem Absturz sofort (das Betriebssystem schliesst die Verbindung), bei einer hängenden Instanz nach etwa 20 s (Heartbeat). Beides liegt unter den 30 s aus S4. chat.persist und chat.dlq sind durable und werden nicht angefasst.
 
     4.5 batch-writer und postgres gestoppt (S5):
 
@@ -249,7 +253,7 @@ Spezifikation Live-Zustellung
 
     Wert: x-overflow drop-head, Wo: Instanz-Queue, Warum: älteste Live-Kopie opfern, nie den Absender blockieren
 
-    Wert: Heartbeat 10 s, Wo: spring.rabbitmq.requested-heartbeat, Warum: tote Instanz nach ~20 s erkannt (S4)
+    Wert: Heartbeat 10 s, Wo: spring.rabbitmq.requested-heartbeat, Warum: hängende Instanz (docker pause, Netzwerkausfall) nach ~20 s erkannt; ein getöteter Prozess wird ohnehin sofort erkannt
 
     Wert: Emitter-Timeout 0 (keiner), Wo: new SseEmitter(0L), Warum: Vorgabe 30 s würde Streams abbrechen
 
