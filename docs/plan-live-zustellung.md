@@ -55,7 +55,26 @@ wiederholen muss:
   > `senderName`, `content`, `sentAt`. Kein Produktionscode ändern.
 * **Test:** `mvn test -pl chat-service -Dtest=MessagePublisherIntegrationTest` → grün.
 * **Commit:** `test: Vertrag am Zustell-Exchange festhalten`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** Den neuen Test `deliveryBodyEqualsPersistBody` und die zwei Hilfsmethoden
+    gelesen. `mvn test -pl chat-service -Dtest=MessagePublisherIntegrationTest` → 3 Tests,
+    0 Fehler. Gegenprobe: In `MessagePublisher` kurz den Zustellweg so geändert, dass er
+    `senderName` als `null` schickt → der Test wird rot (`expected: ..."senderName":"Anna Muster"...
+    but was: ..."senderName":null...`). Danach `MessagePublisher` mit `git checkout`
+    wiederhergestellt. Der Test schlägt also an, wenn sich das Format auf nur einem Weg ändert.
+  * **Geändert:** Drei Zeilen im Vorschlag der KI hatten verschachtelte Aufrufe
+    (`new String(message.getBody(), ...)`, `receive(queue.getName(), 5000)`,
+    `getMessageProperties().getContentType()`). Das widerspricht CLAUDE.md («ein Ergebnis pro
+    Zeile») und würde in S8 auffallen. Ich habe sie in benannte Variablen aufgeteilt
+    (`deliveryQueueName`, `persistBytes`, `deliveryBytes`, `deliveryProperties`). Danach
+    erneut 3 Tests, 0 Fehler. Produktionscode ist unverändert.
+  * **Aufgefallen:**
+    * `bindProbeQueueToDeliveryExchange()` wiederholt den Anfang von
+      `publishesToDeliveryExchange`. Bewusst so gelassen: Der Schritt soll einen Test
+      ergänzen; den alten Test umzubauen wäre ein zweites Thema im selben Commit.
+    * Die Feldprüfung schaut nur, ob die sechs Felder vorhanden sind, nicht ob sie einen
+      Wert haben. In der Gegenprobe hat deshalb nur der Vergleich der Bodies angeschlagen.
+      Reicht für den Vertrag, weil der Vergleich jede einseitige Änderung findet.
 
 ---
 
