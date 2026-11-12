@@ -63,8 +63,10 @@ Spezifikation Live-Zustellung
 
         Ein Ereignis pro Nachricht:
 
-        id: 6e59eeb3-15c1-461f-8b53-83791524eac9
-        data: {"id":"6e59eeb3-...","roomId":"a1b2c3d4-...","senderId":"anna","senderName":"Anna","content":"Hallo","sentAt":"2026-11-12T10:00:00.123456789Z"}
+        id:6e59eeb3-15c1-461f-8b53-83791524eac9
+        data:{"id":"6e59eeb3-...","roomId":"a1b2c3d4-...","senderId":"anna","senderName":"Anna","content":"Hallo","sentAt":"2026-11-12T10:00:00.123456789Z"}
+
+        Spring (SseEmitter) schreibt id: und data: ohne Leerzeichen nach dem Doppelpunkt. Laut SSE-Standard ist das gleichwertig mit id: 6e59…: Ein einzelnes Leerzeichen direkt nach dem Doppelpunkt gehört nicht zum Wert, ein Browser liest beides gleich. Auch grep '^id:' in Kapitel 6 findet beide Schreibweisen. Wer die Zeilen selbst zerlegt, muss ein Leerzeichen also erlauben, aber nicht verlangen.
 
         id: ist die Nachrichten-ID. Der Browser (EventSource) merkt sie sich und schickt sie bei der Neuverbindung automatisch als Header Last-Event-ID.
 
@@ -72,6 +74,8 @@ Spezifikation Live-Zustellung
         Kein event:-Feld: Ereignisse heissen damit standardmässig message.
 
         Lebenszeichen: Alle 15 s eine Kommentarzeile : keepalive. Kommentare sind keine Ereignisse, ein Client sieht sie nicht. Sie dienen dazu, tote Verbindungen zu bemerken (das Schreiben schlägt fehl, die Verbindung wird abgemeldet).
+
+        Verbindungsbestätigung: Gleich beim Verbinden schickt der Dienst eine Kommentarzeile :connected. Grund: Spring schickt Status 200 und Content-Type: text/event-stream erst mit dem ersten Schreiben. Ohne diesen Kommentar sähe ein Client bis zur ersten Nachricht oder bis zum ersten Keepalive (bis zu 15 s) nicht einmal die Antwort-Kopfzeilen und wüsste nicht, ob er verbunden ist. Ein Test oder Prüfskript wüsste dann nicht, ab wann er senden darf, ohne dass die ersten Nachrichten verloren gehen. Wie :keepalive ist :connected kein Ereignis und wird von Clients nicht angezeigt.
 
         Neuverbindung: gleicher Endpunkt, zusätzlich Header Last-Event-ID: <uuid> (Verhalten 4.6).
 
