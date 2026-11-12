@@ -40,6 +40,10 @@ class MessageControllerIntegrationTest {
     @Autowired
     private RabbitTemplate rabbitTemplate;
 
+    /**
+     * Eine gültige Nachricht wird mit 202, ID und Zeitstempel angenommen und
+     * liegt danach mit unverändertem Inhalt in chat.persist.
+     */
     @Test
     void acceptsMessageAndPutsItOnTheQueue() throws Exception {
         String requestBody = """
@@ -68,6 +72,7 @@ class MessageControllerIntegrationTest {
         assertEquals("Anna Muster", message.senderName());
     }
 
+    /** Eine Nachricht nur aus Leerzeichen ist keine Nachricht: der Dienst antwortet mit 400. */
     @Test
     void rejectsEmptyContent() throws Exception {
         String requestBody = """

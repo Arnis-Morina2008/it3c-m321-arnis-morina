@@ -462,3 +462,23 @@ und Änderungsgrund dazu, in einem eigenen Commit._
   Stellen gefunden. Sie stammen alle aus dem vorgegebenen Code vor Bewertung 1, darum standen
   sie in keinem Schritt dieses Plans.
 * **Wann aufgefallen:** Bei der Prüfung von Schritt 6, vor dessen Commit.
+* **Geprüft und korrigiert:**
+  * **Auftrag an die KI:** Einen eigenen Wortlaut gab es nicht. Der Auftrag war dieser Eintrag
+    selbst (was sich ändert, Test, Commit) und dazu «fahre fort». Das hätte ich wie bei den
+    anderen Schritten ausformulieren sollen; der Eintrag ist aber konkret genug, dass die KI
+    genau das Verlangte getan hat.
+  * **Geprüft:** `git diff` gelesen: 8 Dateien, nur hinzugefügte Kommentarzeilen, keine Zeile
+    Code geändert. Die KI hat 18 Stellen ergänzt, mein Prüfer hatte 17 gemeldet. Der
+    Unterschied ist der Konstruktor von `RecordingPublisher` in `MessageServiceTest`: Mein
+    Prüfer erkennt nur Methoden mit Rückgabetyp, Konstruktoren nicht. Die 18 ist also richtig.
+    Danach findet mein Prüfer keine Stelle mehr, `mvn test -pl chat-service` → 28 Tests,
+    0 Fehler.
+  * **Kommentare gegen die Tests gelesen:** Jeder Kommentar mit dem Testkörper verglichen.
+    17 stimmen. Einer behauptete mehr, als der Test prüft: Über `rejectsEmptyContent` stand
+    «400, nichts wird gesendet», der Test prüft aber nur den Status 400, nicht, ob etwas in
+    der Queue landet.
+  * **Geändert:** Diesen Kommentar auf «der Dienst antwortet mit 400» gekürzt. Ein Kommentar,
+    der eine Prüfung verspricht, die es nicht gibt, ist schlimmer als keiner.
+  * **Bewusst gelassen:** Die Warnungen «LF will be replaced by CRLF». Das Skript der KI hat die
+    Zeilenenden in der Arbeitskopie umgestellt; Git gleicht das beim Commit aus, im Repo ändert
+    sich dadurch nichts.
