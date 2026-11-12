@@ -172,7 +172,40 @@ wiederholen muss:
     IDs, Inhalte je Absender aufsteigend; B-Client 0 Ereignisse.
   * Von Hand: S3 und S5 mit den Befehlen aus Spezifikation 6.
 * **Commit:** `feat: Nachrichten per Server-Sent Events an die Clients eines Raums`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** `StreamRegistry`, `StreamController`, `DeliveryListener`,
+    `ChatServiceApplication`, `SseTestClient`, `StreamControllerTest` und
+    `TwoInstanceDeliveryIntegrationTest` gelesen. `mvn test -pl chat-service` → 21 Tests,
+    0 Fehler. Laut KI am Stack: S3 400/400/0, S5 100 Ereignisse nach 5 s und +100 Zeilen.
+    Zwei Gegenproben an `StreamRegistry` (danach aus einer Sicherung wiederhergestellt):
+    * Raumfilter aus (alle Clients in einer gemeinsamen Liste) → Pflichttest S3 rot:
+      `Client in Raum B hat Nachrichten bekommen ==> expected: <0> but was: <40>`.
+    * Jede Nachricht zweimal gesendet → rot: `Anzahl Ereignisse ==> expected: <40> but was: <78>`.
+    Der Test erkennt also beides, was S3 verlangt: nur der eigene Raum und genau einmal.
+  * **Geändert am Code:** Nichts. Die Gegenproben haben keine Lücke gezeigt wie in Schritt 2.
+  * **Abweichungen der KI vom Auftrag, entschieden:**
+    * Kommentar `:connected` beim Verbinden: **bleibt.** Spring schickt Status und
+      Content-Type erst mit dem ersten Schreiben; ohne ihn wüsste ein Client (und der Test)
+      bis zu 15 s nicht, ob er verbunden ist. In Spezifikation 2.2 nachgetragen (eigener Commit).
+    * `id:` und `data:` ohne Leerzeichen: **bleibt.** Laut SSE-Standard gleichwertig, Browser
+      und `grep '^id:'` lesen beides. Beispiel und Begründung in Spezifikation 2.2 angepasst.
+    * `IllegalStateException` zusätzlich zu `IOException` abgefangen: bleibt, gleiche
+      Folge (Client weg, abmelden).
+    * `StreamControllerTest` mit echter `StreamRegistry` statt Mock: bleibt, sonst gibt es
+      ohne `:connected` keinen Content-Type zum Prüfen.
+  * **Aufgefallen, bewusst gelassen:**
+    * `StreamRegistry` sendet ausserhalb der Tabellen-Sperre auf einer Kopie der Liste, das
+      Senden selbst ist `synchronized (emitter)`. Sperren werden immer in der Reihenfolge
+      Emitter → Tabelle genommen (in `send` beim Abmelden), nie umgekehrt; darum kein Deadlock.
+    * `waitForEvents` kehrt zurück, sobald mindestens 40 Ereignisse da sind. Ein Duplikat,
+      das erst danach ankäme, sähe der Test nicht. Die Gegenprobe zeigt, dass Duplikate in
+      der Praxis sofort mitkommen (78); für S3 reicht das.
+    * Client B1 wird ohne Warten geprüft. Hätte er eine Nachricht bekommen, aber sein
+      Lesethread sie noch nicht verarbeitet, bliebe der Test fälschlich grün. Die Gegenprobe
+      (40 bei B1) zeigt, dass das in der Praxis nicht passiert.
+    * `StreamControllerTest` ruft `mockMvc.perform(get(...).param(...))` verschachtelt auf.
+      Das ist derselbe Stil wie im bestehenden `MessageControllerIntegrationTest`; die
+      MockMvc-Kette ist so gedacht, darum gelassen.
 
 ---
 

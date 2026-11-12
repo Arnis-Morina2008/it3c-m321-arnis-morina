@@ -10,6 +10,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /**
  * Holt die Kopien vom Zustellweg ab: alles, was in der eigenen Queue
@@ -21,8 +22,8 @@ import java.nio.charset.StandardCharsets;
  * Gelesen werden nur die zwei Felder, die die Zustellung braucht: roomId
  * (an wen) und id (für das id:-Feld im Stream).
  *
- * In diesem Schritt wird die Nachricht nur geloggt. Das Senden an die
- * Clients kommt mit GET /stream dazu.
+ * Weitergegeben wird die Nachricht an die StreamRegistry, die sie an die
+ * offenen Streams ihres Raums schickt.
  */
 @Service
 @Slf4j
@@ -30,6 +31,8 @@ import java.nio.charset.StandardCharsets;
 public class DeliveryListener {
 
     private final ObjectMapper objectMapper;
+
+    private final StreamRegistry streamRegistry;
 
     /**
      * Wird für jede Nachricht in der Queue dieser Instanz aufgerufen.
@@ -52,14 +55,33 @@ public class DeliveryListener {
             return;
         }
 
-        String roomId = readText(fields, "roomId");
+        String roomIdText = readText(fields, "roomId");
         String messageId = readText(fields, "id");
-        if (roomId == null || messageId == null) {
+        if (roomIdText == null || messageId == null) {
             log.warn("Delivery message without roomId or id dropped: {}", json);
             return;
         }
 
-        log.debug("Delivery message {} for room {} received", messageId, roomId);
+        UUID roomId = parseRoomId(roomIdText);
+        if (roomId == null) {
+            log.warn("Delivery message with invalid roomId dropped: {}", json);
+            return;
+        }
+
+        streamRegistry.sendToRoom(roomId, messageId, json);
+    }
+
+    /**
+     * Wandelt die roomId in eine UUID um, denn die Raumtabelle ist nach UUID
+     * aufgebaut. So ist es egal, ob die ID gross oder klein geschrieben
+     * ankommt. Gibt null zurück, wenn der Text keine UUID ist.
+     */
+    private UUID parseRoomId(String roomIdText) {
+        try {
+            return UUID.fromString(roomIdText);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
     }
 
     /**
