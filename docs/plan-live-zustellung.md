@@ -108,7 +108,38 @@ wiederholen muss:
     `rabbitmqctl -q list_queues name consumers arguments | grep '^chat\.delivery\.'`
     → eine Queue, 1 Consumer.
 * **Commit:** `feat: eigene Zustell-Queue pro chat-service-Instanz`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** `RabbitConfig`, `DeliveryListener`, `QueueNames`, `application.yml` und
+    `DeliveryQueueIntegrationTest` gelesen. `mvn test -pl chat-service` → 17 Tests, 0 Fehler.
+    Zwei Gegenproben an `RabbitConfig` (danach jedes Mal aus einer Sicherung wiederhergestellt):
+    * `x-max-length` 1000 statt 900 → `declaresInstanceQueueWithLimits` wird rot
+      (`Argumente: [{"x-overflow","drop-head"},{"x-max-length",1000}]`). Gut.
+    * `.exclusive()` entfernt → `redeclaresSameQueueAfterConnectionLoss` blieb **grün**.
+      Eine Queue, die nicht exclusive ist, überlebt den Verbindungsabbruch einfach; der Test
+      fand sie danach wieder und war zufrieden. Er hat also nicht bewiesen, dass die Queue
+      gelöscht und neu angelegt wird.
+  * **Geändert:** `redeclaresSameQueueAfterConnectionLoss` liest jetzt zusätzlich mit
+    `rabbitmqctl list_queues name owner_pid`, welcher Verbindung die Queue gehört
+    (neue Hilfsmethode `readOwnerConnection`). Vor dem Abbruch darf das Feld nicht leer sein
+    (sonst ist die Queue nicht exclusive), und danach muss es eine andere Verbindung sein.
+    Mit dieser Prüfung wird die Gegenprobe ohne `.exclusive()` rot
+    (`Queue hat keine Besitzer-Verbindung, ist also nicht exclusive`). Beim ersten Versuch
+    stürzte die neue Methode bei leerem `owner_pid` mit `StringIndexOutOfBounds` ab, weil
+    `trim()` vor `substring` den Tab entfernte; Reihenfolge umgedreht. Danach wieder
+    17 Tests, 0 Fehler.
+  * **Bewusst gelassen:**
+    * Die Kommentare «web-gateway-Instanzen» → «chat-service-Instanzen» in `RabbitConfig`
+      und `QueueNames` und der angepasste Kommentar in `ChatServiceApplicationTest`. Sie
+      gehen über den Auftrag hinaus, aber die alten Kommentare waren seit diesem Schritt
+      falsch (Spezifikation 1.2). Nur Kommentare, kein Code.
+    * `log.debug` für jede Nachricht im `DeliveryListener`. Bei Last viel Log, aber der
+      Listener sendet ab Schritt 3 an die Clients, dann fällt die Zeile weg.
+    * «Connection refused» im Testlog: Spring behält die Test-Kontexte, deren Listener
+      versuchen nach dem Testende den gestoppten RabbitMQ-Container zu erreichen. Harmlos,
+      die Tests bleiben grün.
+  * **Nachtrag zu Schritt 1:** Der Commit `d1a16e6` hat keine Zeile
+    `Co-Authored-By`, obwohl der Test von der KI stammt. Er ist schon gepusht; ihn zu ändern
+    hiesse Force-Push, darum bleibt er so. Ab diesem Schritt trägt jeder Code-Commit die Zeile.
 
 ---
 

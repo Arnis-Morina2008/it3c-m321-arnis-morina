@@ -12,8 +12,15 @@ public final class QueueNames {
     /** Schreibweg: hier holt der batch-writer die Nachrichten ab. */
     public static final String PERSIST_QUEUE = "chat.persist";
 
-    /** Zustellweg: fanout an alle web-gateway-Instanzen. */
+    /** Zustellweg: fanout an alle chat-service-Instanzen. */
     public static final String DELIVERY_EXCHANGE = "chat.delivery";
+
+    /**
+     * Anfang des Namens der Queue, die jede chat-service-Instanz für sich an
+     * chat.delivery bindet. Dahinter kommt eine UUID (Spezifikation 3.3).
+     * So erkennt man in rabbitmqctl sofort, wozu die Queue gehört.
+     */
+    public static final String DELIVERY_QUEUE_PREFIX = "chat.delivery.";
 
     /** Dead Letter: was der batch-writer endgültig nicht verarbeiten kann. */
     public static final String DEAD_LETTER_QUEUE = "chat.dlq";

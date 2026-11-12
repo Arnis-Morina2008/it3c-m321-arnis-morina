@@ -8,6 +8,11 @@ spring:
     port: 5672
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    # Lebenszeichen zwischen Dienst und Broker alle 10 s (Spezifikation 3.4).
+    # Stirbt eine Instanz hart, merkt RabbitMQ es nach etwa zwei verpassten
+    # Lebenszeichen (~20 s) und löscht ihre exclusive Queue. Der Vorgabewert
+    # von 60 s wäre zu langsam für die 30 s aus S4.
+    requested-heartbeat: 10s
 
 server:
   port: 8080
