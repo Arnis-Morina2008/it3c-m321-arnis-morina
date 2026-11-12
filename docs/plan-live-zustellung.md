@@ -384,5 +384,36 @@ wiederholen muss:
 
 ## Änderungen am Plan
 
-_Noch keine. Jede Änderung kommt hier als eigener Eintrag mit Datum, betroffenem Schritt
+_Jede Änderung kommt hier als eigener Eintrag mit Datum, betroffenem Schritt
 und Änderungsgrund dazu, in einem eigenen Commit._
+
+### 12. November 2026 · Schritt 6: Containernamen ermitteln statt fest eintragen
+
+* **Was sich ändert:** Der Auftrag an die KI in Schritt 6 sagt: «wo die Spezifikation einen
+  Befehl vorgibt, genau diesen verwenden». Spezifikation 6 trägt die Containernamen fest ein
+  (`CS1=it3c-m321-arnis-morina-chat-service-1`). Das Skript ermittelt sie stattdessen mit
+  `docker compose ps --format '{{.Name}}' chat-service`. Alle anderen Befehle aus
+  Spezifikation 6 bleiben wie vorgegeben.
+* **Änderungsgrund:** Docker Compose setzt den Ordnernamen vor jeden Containernamen. Der Test
+  von Schritt 6 verlangt einen frischen Klon in einem anderen Ordner; dort heissen die
+  Container anders (z. B. `frischer-klon-chat-service-1`), und mit den festen Namen würde
+  jedes Szenario ab S3 ins Leere laufen. Auch die Lehrperson prüft in ihrem eigenen Ordner.
+* **Wann aufgefallen:** Beim Bau von Schritt 6, als das Skript im frischen Klon getestet
+  wurde. Der Code von Schritt 6 ist noch nicht committet; dieser Eintrag kommt vorher in
+  einem eigenen Commit.
+
+### 12. November 2026 · Neuer Schritt 6a: fehlende Kommentare im vorgegebenen Code ergänzen
+
+* **Was sich ändert:** Nach Schritt 6 und vor Schritt 7 kommt ein Schritt 6a. Er ergänzt
+  Kommentare über 17 Methoden, die keinen haben: eine in `MessageExceptionHandler`, 16 in den
+  Tests `ChatServiceApplicationTest`, `RabbitConfigIntegrationTest`,
+  `MessageControllerIntegrationTest`, `MessageExceptionHandlerTest`, `SendMessageRequestTest`,
+  `MessagePublisherIntegrationTest` und `MessageServiceTest`. Nur Kommentare, kein Code.
+  Test: dieselbe Prüfung wie unten findet keine Stelle mehr, `mvn test -pl chat-service` bleibt
+  grün. Commit: `docs: fehlende Kommentare im chat-service ergaenzen`.
+* **Änderungsgrund:** S8 prüft «Kommentar über jeder Klasse und Methode» im ganzen Quelltext von
+  `chat-service/`, nicht nur im neuen Code. Das Abnahmeskript aus Schritt 6 prüft das nicht
+  (mit `grep` kaum zuverlässig messbar). Eine Durchsicht mit einem kleinen Prüfer hat die 17
+  Stellen gefunden. Sie stammen alle aus dem vorgegebenen Code vor Bewertung 1, darum standen
+  sie in keinem Schritt dieses Plans.
+* **Wann aufgefallen:** Bei der Prüfung von Schritt 6, vor dessen Commit.
