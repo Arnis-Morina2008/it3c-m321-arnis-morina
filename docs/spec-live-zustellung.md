@@ -388,4 +388,6 @@ Spezifikation Live-Zustellung
 
         Nachhol-Puffer nach Neustart leer und bei drop-head lückenhaft (4.6).
 
+        Sperren pro Raum ohne Grenze (4.6): Die Sperre, unter der Listener und Neuverbindung arbeiten, liegt in einer Tabelle Raum → leeres Objekt. Diese Tabelle wird nie verkleinert, sie wächst mit jedem Raum, den die Instanz je gesehen hat. Die Grenze von 100 Räumen gilt nur für den Nachhol-Puffer. Bewusst so: Eine Sperre zu entfernen, während jemand sie hält, würde für denselben Raum eine zweite Sperre erzeugen, und die Absicherung gegen Lücken und Duplikate wäre weg. Ein Eintrag (UUID und leeres Objekt) kostet etwa 100 Byte; selbst 100'000 verschiedene Räume wären etwa 10 MB, weniger als der Nachhol-Puffer. Ausbauweg, falls es nötig wird: eine feste Anzahl Sperren (z. B. 64), der Raum bekommt eine davon über seinen Hashwert; zwei Räume teilen sich dann manchmal eine Sperre, was nur langsamer, nie falsch ist.
+
         PLANUNG.md nachführen: Konsument von chat.delivery ist jetzt der chat-service, nicht das web-gateway (1.2).
