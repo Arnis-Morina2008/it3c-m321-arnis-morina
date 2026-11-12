@@ -27,6 +27,7 @@ Alle Aufgaben werden in **deinem Fork** gelöst. Das Original-Repository bleibt 
 mvn clean test                   # alle Tests, RabbitMQ und PostgreSQL kommen per Testcontainers
 docker compose up -d --build     # rabbitmq, chat-service, postgres und batch-writer im Netz chat-net
 docker compose up -d --scale batch-writer=2   # zwei batch-writer an derselben Queue
+docker compose up -d --scale chat-service=2   # zwei chat-service, jeder mit eigener Zustell-Queue
 ```
 
 Kein Dienst veröffentlicht einen Port auf den Host. Der einzige offene Port des Gesamtsystems
@@ -43,11 +44,39 @@ docker compose exec postgres psql -U chat -d chat -c "SELECT sender_name, conten
 Wie der `batch-writer` arbeitet und wie man jedes Szenario misst, steht in
 [`docs/spec-batch-writer.md`](docs/spec-batch-writer.md).
 
+### Nachrichten live mitlesen
+
+Jede Nachricht geht zusätzlich per Server-Sent Events an alle, die gerade im Raum sind.
+Einen Stream öffnet man ebenfalls aus einem Hilfscontainer im Netz `chat-net`. `-N` sorgt
+dafür, dass curl jede Zeile sofort ausgibt, statt zu puffern:
+
+```bash
+docker run --rm --network chat-net curlimages/curl:8.10.1 -sN \
+  "http://chat-service:8080/stream?roomId=3f2b1c4e-0000-0000-0000-000000000001"
+```
+
+In einem zweiten Terminal eine Nachricht für denselben Raum senden (Befehl oben). Im ersten
+erscheint sie sofort:
+
+```
+:connected
+
+id:6e59eeb3-15c1-461f-8b53-83791524eac9
+data:{"id":"6e59eeb3-…","roomId":"3f2b1c4e-…","senderId":"anna","senderName":"Anna","content":"Hallo","sentAt":"…"}
+```
+
+Wer nach einer Unterbrechung mit dem Header `Last-Event-ID: <letzte id>` neu verbindet,
+bekommt zuerst die verpassten Nachrichten. Mit zwei Instanzen
+(`docker compose up -d --scale chat-service=2`) erreicht man jede einzeln über ihren
+Containernamen (`docker compose ps`). Alle Szenarien von Bewertung 2 prüft
+`bash docs/abnahme.sh`; Verhalten und Grenzen stehen in
+[`docs/spec-live-zustellung.md`](docs/spec-live-zustellung.md).
+
 ## Was gebaut wird
 
 | Baustein | Technologie | Aufgabe | Stand |
 |---|---|---|---|
-| chat-service | Spring Boot 3, Java 21 | Nimmt Nachrichten per `POST /messages` an, legt sie auf Queue und Fanout-Exchange | vorhanden |
+| chat-service | Spring Boot 3, Java 21 | Nimmt Nachrichten per `POST /messages` an, legt sie auf Queue und Fanout-Exchange. Liefert sie live per `GET /stream?roomId=` (Server-Sent Events) an die Clients des Raums, jede Instanz mit eigener Queue an `chat.delivery` | vorhanden |
 | rabbitmq | RabbitMQ 3.13 | Message Queue zwischen den Services | vorhanden |
 | batch-writer | Spring Boot 3, Java 21 | Einziger Schreiber in die Datenbank: liest `chat.persist`, schreibt Stapel von bis zu 500 Nachrichten | vorhanden |
 | postgres | PostgreSQL | Speichert den Chat-Verlauf | vorhanden |
@@ -69,6 +98,9 @@ erreichbar.
 - [`docs/spec-batch-writer.md`](docs/spec-batch-writer.md) und
   [`docs/plan-batch-writer.md`](docs/plan-batch-writer.md) — Spezifikation und Umsetzungsplan
   des `batch-writer`.
+- [`docs/spec-live-zustellung.md`](docs/spec-live-zustellung.md) und
+  [`docs/plan-live-zustellung.md`](docs/plan-live-zustellung.md) — Spezifikation und
+  Umsetzungsplan der Live-Zustellung, [`docs/abnahme.sh`](docs/abnahme.sh) prüft sie.
 - [`CLAUDE.md`](CLAUDE.md) — Codestil-Regeln für dieses Projekt. Gelten auch für dich.
 - [`docs/flipchart-chat-app.png`](docs/flipchart-chat-app.png) — das Flipchart aus der Lektion,
   von dem die Planung ausgeht.

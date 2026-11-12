@@ -423,7 +423,21 @@ wiederholen muss:
 * **Test:** `mvn clean test` im Wurzelverzeichnis ein Lauf grün (S1);
   `git ls-files .env` → leer.
 * **Commit:** `docs: README und Planung fuer die Live-Zustellung nachfuehren`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** `git diff` von `README.md` und `PLANUNG.md` gelesen. `.env.example` ist
+    unverändert. `mvn clean test` im Wurzelverzeichnis → Exit 0, 39 Tests, 0 Fehler
+    (chat-service und batch-writer zusammen, S1). `git ls-files .env` → leer.
+  * **README-Beispiel am Stack ausprobiert:** Den Stream-Befehl aus dem neuen Abschnitt
+    «Nachrichten live mitlesen» in einem Hilfscontainer gestartet und den Sendebefehl von
+    weiter oben im README ausgeführt. Die Ausgabe war genau wie im README: `:connected`, eine
+    leere Zeile, dann `id:` und `data:` ohne Leerzeichen. Das lief sogar mit zwei Instanzen,
+    obwohl der Name `chat-service` dann auf eine zufällige Instanz zeigt: Stream und Senden
+    können an verschiedenen Instanzen landen, der Fanout bringt die Nachricht trotzdem an.
+  * **Geändert:** Nichts.
+  * **Entschieden:** Die Hinweise in `PLANUNG.md` (3.4 und 3.5) bleiben. `PLANUNG.md` ist die
+    Vorlage der Lehrperson, aber der Plan verlangt in diesem Schritt ausdrücklich einen Hinweis,
+    und Spezifikation 7.2 nennt das Nachführen als offenen Punkt. Der alte Text bleibt stehen,
+    die Hinweise sind als «Stand Bewertung 2» erkennbar und verweisen auf die Spezifikation.
 
 ---
 

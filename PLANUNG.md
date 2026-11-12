@@ -148,6 +148,13 @@ Anfrage.
 
 ### 3.4 Nachrichtenfluss
 
+> **Stand Bewertung 2 (November 2026):** Der Zustellweg endet vorerst am `chat-service`,
+> nicht am `web-gateway`. Jede `chat-service`-Instanz konsumiert `chat.delivery` über eine
+> eigene Queue und liefert die Nachrichten per Server-Sent Events (`GET /stream?roomId=`)
+> an die Clients des Raums. Ein späteres Gateway reicht diesen Stream nur noch durch.
+> Details: [`docs/spec-live-zustellung.md`](docs/spec-live-zustellung.md). Der Text unten
+> beschreibt das ursprünglich geplante Zielbild.
+
 Der Kern des ganzen Projekts: **Zustellung und Speicherung sind entkoppelt.** Die
 Nachricht ist beim Empfänger, bevor sie in der Datenbank steht.
 
@@ -190,6 +197,12 @@ sequenceDiagram
 ```
 
 ### 3.5 Queues und Exchanges
+
+> **Stand Bewertung 2 (November 2026):** Verbraucher von `chat.delivery` ist der
+> `chat-service`, nicht das `web-gateway`. Jede Instanz bindet die Queue
+> `chat.delivery.<UUID>` (nicht durable, exclusive, `x-max-length` 900, `x-overflow`
+> drop-head, Prefetch 100). Begründung der Werte:
+> [`docs/spec-live-zustellung.md`](docs/spec-live-zustellung.md) Kapitel 3.
 
 Der einzige Erzeuger ist der `chat-service`. Es gibt **keine** Eingangs-Queue — der
 Sendeweg läuft per REST ins `chat-service`, nicht über den Broker.
