@@ -1,5 +1,6 @@
 package ch.benedict.m321.chatservice.controller;
 
+import ch.benedict.m321.chatservice.service.ReplayBuffer;
 import ch.benedict.m321.chatservice.service.StreamRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * mit echtem Broker.
  */
 @WebMvcTest(StreamController.class)
-@Import(StreamRegistry.class)
+@Import({StreamRegistry.class, ReplayBuffer.class})
 class StreamControllerTest {
 
     @Autowired

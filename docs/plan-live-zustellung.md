@@ -236,7 +236,56 @@ wiederholen muss:
     Inhalte 1..50 in Reihenfolge, keine ID doppelt; danach 1 neue Nachricht → kommt live an.
   * Von Hand: S7 mit den Befehlen aus Spezifikation 6.
 * **Commit:** `feat: verpasste Nachrichten mit Last-Event-ID nachliefern`
-* **Geprüft und korrigiert:** _wird nach dem Schritt ausgefüllt_
+* **Geprüft und korrigiert:**
+  * **Geprüft:** `ReplayBuffer`, `StreamRegistry`, `DeliveryListener`, `StreamController`,
+    `ReplayBufferTest`, `ReconnectIntegrationTest` und `SseTestClient` gelesen.
+    `mvn test -pl chat-service` → 27 Tests, 0 Fehler (vor meiner Änderung). Laut KI am Stack:
+    S7 besteht mit den echten 10 s. Drei Gegenproben (danach jedes Mal aus einer Sicherung
+    wiederhergestellt):
+    * E: Schleife in `messagesAfter` ab `lastEventIndex` statt `lastEventIndex + 1` →
+      `ReconnectIntegrationTest` rot, `ReplayBufferTest` 3 von 5 rot. Gut.
+    * F: `register` vor den `synchronized (roomLock)`-Block gezogen → Pflichttest S7 **grün**,
+      3 von 3 Läufen.
+    * G: Sperre im `DeliveryListener` ganz entfernt → Pflichttest S7 **grün**, 3 von 3 Läufen.
+    Der Pflichttest prüft also den S7-Ablauf, aber nicht die Sperre. Bis der Client sich neu
+    verbindet, sind alle 50 Nachrichten schon verteilt; die Naht zwischen Nachliefern und live
+    wird nie getroffen. Der Kommentar im Test («macht ihn sogar strenger … genau an dieser
+    Naht») stimmte nicht.
+  * **Geändert:**
+    * Neuer Test `replaysWithoutGapOrDuplicateWhileMessagesKeepArriving` in
+      `ReconnectIntegrationTest`: Ein Thread sendet laufend 300 Nachrichten, nach 50 verbindet
+      sich der Client mit `Last-Event-ID` neu. Erwartet: genau 1 bis 300, lückenlos, in
+      Reihenfolge, keine doppelt. Mit echtem Code 3 von 3 grün.
+    * Falschen Satz im Klassenkommentar des Tests korrigiert.
+    * Danach `mvn test -pl chat-service` → 28 Tests, 0 Fehler.
+    * Gegenproben mit dem neuen Test: G 1 von 3 Läufen rot, F 0 von 3. Ein Wettlauf-Fehler
+      lässt sich mit einem Test nur mit einer gewissen Wahrscheinlichkeit finden, nicht
+      ausschliessen. Dass die Sperre richtig sitzt, begründe ich deshalb am Code (siehe unten),
+      nicht mit dem Test. Den Test behalte ich trotzdem: Er ist mit echtem Code stabil grün und
+      fängt den gröberen Fehler G zumindest manchmal.
+  * **Warum die Sperre richtig sitzt:** Listener (`deliver`) und Neuverbindung (`stream`)
+    nehmen dieselbe Sperre des Raums. Kommt eine Nachricht, während der Controller nachliefert,
+    wartet der Listener an der Sperre. Danach ist der Client angemeldet und bekommt sie live;
+    im Puffer-Ausschnitt, den der Controller gelesen hat, war sie noch nicht. Kam sie vorher,
+    steht sie im Puffer und wird nachgeliefert; live bekommt der Client sie nicht, weil er noch
+    nicht angemeldet war. Also nie beides, nie keins. Sperren-Reihenfolge immer Raum → Emitter
+    → Tabelle; `roomLock()` nimmt die Tabellen-Sperre nur kurz, bevor die Raum-Sperre genommen
+    wird. Darum kein Deadlock.
+  * **Entschieden:**
+    * Sperren-Map ohne Grenze: **bleibt.** Eine Sperre zu entfernen, während jemand sie hält,
+      würde die Absicherung brechen; ein Eintrag kostet etwa 100 Byte. In Spezifikation 7.2
+      «Bewusst offen» nachgetragen, mit Ausbauweg (feste Anzahl Sperren über den Hashwert),
+      eigener Commit.
+    * `:connected` unter der Sperre vor dem Nachliefern: bleibt, so kommt der Kommentar
+      immer zuerst.
+    * Test ohne 10 s Wartezeit: bleibt. Die Wartezeit ändert am Ablauf nichts, S7 mit 10 s
+      ist am Stack geprüft.
+  * **Aufgefallen, bewusst gelassen:**
+    * Ein langsamer Client hält beim Nachliefern von bis zu 1000 Nachrichten die Sperre des
+      Raums und damit den einzigen Listener-Thread auf. Gleiche Grenze wie Spezifikation 4.8.
+    * Trennt ein Client während des Nachlieferns, läuft `unregister` vor `register` und tut
+      nichts; der tote Emitter wird angemeldet und erst beim nächsten Senden oder Keepalive
+      entfernt. Harmlos.
 
 ---
 

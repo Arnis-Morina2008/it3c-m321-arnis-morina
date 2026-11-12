@@ -32,6 +32,28 @@ public class StreamRegistry {
 
     private final Map<UUID, List<SseEmitter>> emittersByRoom = new HashMap<>();
 
+    private final Map<UUID, Object> locksByRoom = new HashMap<>();
+
+    /**
+     * Die Sperre eines Raums (Spezifikation 4.6). Der Listener nimmt sie,
+     * während er eine Nachricht in den Nachhol-Puffer legt und sendet; der
+     * StreamController nimmt sie, während er nachliefert und den neuen
+     * Client anmeldet. So kann keine Nachricht zwischen "nachgeliefert" und
+     * "angemeldet" durchrutschen (Lücke) oder in beidem landen (doppelt).
+     *
+     * Die Sperren werden nie entfernt. Würde eine Sperre ersetzt, während
+     * jemand die alte hält, gäbe es für denselben Raum zwei Sperren. Ein
+     * leeres Objekt pro Raum kostet fast nichts.
+     */
+    public synchronized Object roomLock(UUID roomId) {
+        Object lock = locksByRoom.get(roomId);
+        if (lock == null) {
+            lock = new Object();
+            locksByRoom.put(roomId, lock);
+        }
+        return lock;
+    }
+
     /** Trägt eine neue Stream-Verbindung in die Liste ihres Raums ein. */
     public synchronized void register(UUID roomId, SseEmitter emitter) {
         List<SseEmitter> emitters = emittersByRoom.get(roomId);
@@ -69,11 +91,19 @@ public class StreamRegistry {
     public void sendToRoom(UUID roomId, String messageId, String json) {
         List<SseEmitter> emitters = copyEmittersOf(roomId);
         for (SseEmitter emitter : emitters) {
-            SseEmitter.SseEventBuilder event = SseEmitter.event();
-            event.id(messageId);
-            event.data(json);
-            send(roomId, emitter, event);
+            sendMessage(roomId, emitter, messageId, json);
         }
+    }
+
+    /**
+     * Schickt eine Nachricht an eine einzelne Verbindung. Gebraucht für das
+     * Nachliefern an einen Client, der sich mit Last-Event-ID neu verbindet.
+     */
+    public void sendMessage(UUID roomId, SseEmitter emitter, String messageId, String json) {
+        SseEmitter.SseEventBuilder event = SseEmitter.event();
+        event.id(messageId);
+        event.data(json);
+        send(roomId, emitter, event);
     }
 
     /**

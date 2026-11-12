@@ -22,8 +22,9 @@ import java.util.UUID;
  * Gelesen werden nur die zwei Felder, die die Zustellung braucht: roomId
  * (an wen) und id (für das id:-Feld im Stream).
  *
- * Weitergegeben wird die Nachricht an die StreamRegistry, die sie an die
- * offenen Streams ihres Raums schickt.
+ * Weitergegeben wird die Nachricht an den Nachhol-Puffer (ReplayBuffer)
+ * und an die StreamRegistry, die sie an die offenen Streams ihres Raums
+ * schickt.
  */
 @Service
 @Slf4j
@@ -33,6 +34,8 @@ public class DeliveryListener {
     private final ObjectMapper objectMapper;
 
     private final StreamRegistry streamRegistry;
+
+    private final ReplayBuffer replayBuffer;
 
     /**
      * Wird für jede Nachricht in der Queue dieser Instanz aufgerufen.
@@ -68,7 +71,22 @@ public class DeliveryListener {
             return;
         }
 
-        streamRegistry.sendToRoom(roomId, messageId, json);
+        deliver(roomId, messageId, json);
+    }
+
+    /**
+     * Legt die Nachricht in den Nachhol-Puffer und schickt sie an die
+     * offenen Streams des Raums — beides unter der Sperre des Raums
+     * (Spezifikation 4.6). Ein Client, der sich gerade neu verbindet,
+     * wartet so, bis die Nachricht fertig verteilt ist, und bekommt sie
+     * danach entweder aus dem Puffer oder live, aber nie zweimal oder gar nicht.
+     */
+    private void deliver(UUID roomId, String messageId, String json) {
+        Object roomLock = streamRegistry.roomLock(roomId);
+        synchronized (roomLock) {
+            replayBuffer.add(roomId, messageId, json);
+            streamRegistry.sendToRoom(roomId, messageId, json);
+        }
     }
 
     /**

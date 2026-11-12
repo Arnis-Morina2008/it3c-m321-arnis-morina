@@ -41,6 +41,16 @@ public class SseTestClient implements AutoCloseable {
      * und bekommt jede neue Nachricht.
      */
     public static SseTestClient connect(String baseUrl, UUID roomId) throws Exception {
+        return connect(baseUrl, roomId, null);
+    }
+
+    /**
+     * Wie connect(baseUrl, roomId), aber als Neuverbindung: der Header
+     * Last-Event-ID sagt dem Server, welche Nachricht der Client zuletzt
+     * gesehen hat. So macht es auch der Browser nach einem Abbruch.
+     * Mit lastEventId = null wird kein Header geschickt.
+     */
+    public static SseTestClient connect(String baseUrl, UUID roomId, String lastEventId) throws Exception {
         HttpClient.Builder clientBuilder = HttpClient.newBuilder();
         clientBuilder.version(HttpClient.Version.HTTP_1_1);
         HttpClient httpClient = clientBuilder.build();
@@ -48,6 +58,9 @@ public class SseTestClient implements AutoCloseable {
         URI uri = URI.create(baseUrl + "/stream?roomId=" + roomId);
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri);
         requestBuilder.GET();
+        if (lastEventId != null) {
+            requestBuilder.header("Last-Event-ID", lastEventId);
+        }
         HttpRequest request = requestBuilder.build();
 
         HttpResponse.BodyHandler<InputStream> bodyHandler = HttpResponse.BodyHandlers.ofInputStream();
